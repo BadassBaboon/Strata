@@ -132,12 +132,10 @@ Iron out the experience on the platform we have before expanding outward.
 
 ### Phase 5 — AI & The 3D Parallax Module
 
-Incorporate dynamic physical depth into flat 2D image backdrops using local machine learning. Largely modeled on [DepthFlow](https://github.com/BrokenSource/DepthFlow).
-
-- [ ] **ONNX Runtime Framework:** Embed a local inference runtime using `ort` — no external server dependencies.
-- [ ] **Automatic Depth Map Generation:** Run lightweight vision models (e.g., DepthAnything) locally to convert user images into grayscale depth-displacement maps.
-- [ ] **UV Displacement Pipeline:** A parallax shader that distorts textures based on depth data, driven by real-time mouse tracking (and phone gyroscopes once mobile shells exist).
-- [ ] **Parallax Creation UI:** Let users build interactive 3D-styled wallpapers from their own images entirely on-device.
+- [x] **ONNX Runtime Framework:** Embed a local inference runtime using `ort` — no external server dependencies.
+- [x] **Automatic Depth Map Generation:** Run lightweight vision models (e.g., DepthAnything) locally to convert user images into grayscale depth-displacement maps.
+- [x] **UV Displacement Pipeline:** A parallax shader that distorts textures based on depth data, driven by real-time mouse tracking (and phone gyroscopes once mobile shells exist).
+- [x] **Parallax Creation UI:** Let users build interactive 3D-styled wallpapers from their own images entirely on-device.
 
 ### Phase 6 — External API Integrations
 
