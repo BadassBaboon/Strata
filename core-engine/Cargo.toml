@@ -1,0 +1,29 @@
+[package]
+name = "core-engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wgpu = { version = "29.0.3", features = ["naga-ir", "glsl"] }
+winit = { version = "0.30", features = ["rwh_06"] }
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+bytemuck = { version = "1.16", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+log = "0.4"
+thiserror = "1.0"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+cpal = "0.15"
+rustfft = "6"
+# Optional ML depth estimation (Parallax Studio). ONNX Runtime is a heavy native
+# dependency, so it's behind the `depth-onnx` feature and off by default to keep
+# the base engine lightweight. Models are downloaded on demand, never bundled.
+ort = { version = "2.0.0-rc.12", optional = true }
+
+[features]
+default = []
+depth-onnx = ["dep:ort"]
+
+[dev-dependencies]
+pollster = "0.3"
+image = { version = "0.25", default-features = false, features = ["png"] }

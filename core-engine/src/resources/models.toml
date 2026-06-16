@@ -1,0 +1,158 @@
+# Strata model registry — the single source of truth for every downloadable ML
+# model the Parallax Studio can use. Weights are NEVER bundled; the desktop shell
+# fetches them on demand into %AppData%/strata/models/<id>/<file>.
+#
+# This file is embedded at build time (include_str!) and parsed at runtime, so a
+# future "update model library" feature can simply replace it with a freshly
+# fetched copy (same schema) without recompiling.
+#
+# Fields per entry:
+#   id            unique slug; also the on-disk subdirectory (so identically named
+#                 files like "model.onnx" never collide across models)
+#   name          dropdown label
+#   license       SPDX-ish string shown to the user
+#   commercial_ok true if the license permits commercial use
+#   size_mb       total download size (all files), for the UI
+#   input_size    square model input resolution
+#   invert        flip near/far (true when the model outputs larger = farther)
+#   arch          depth only: "v2" (4-D input) or "v3" (5-D pixel_values input)
+#   tier          depth only: small | base | large (GPU recommendation bucket)
+#   files         ordered list; files[0] is the .onnx graph ORT loads, the rest
+#                 (e.g. external "model.onnx_data") just sit alongside it
+
+schema_version = 1
+
+# ── Depth estimators ─────────────────────────────────────────────────────────
+
+[[depth]]
+id = "da3-small"
+name = "Depth Anything V3 Small (99 MB · Apache)"
+license = "Apache-2.0"
+commercial_ok = true
+size_mb = 100
+input_size = 518
+invert = false
+arch = "v3"
+tier = "small"
+files = [
+  { name = "model.onnx",      url = "https://huggingface.co/onnx-community/depth-anything-v3-small/resolve/main/onnx/model.onnx?download=true" },
+  { name = "model.onnx_data", url = "https://huggingface.co/onnx-community/depth-anything-v3-small/resolve/main/onnx/model.onnx_data?download=true" },
+]
+
+[[depth]]
+id = "da3-base"
+name = "Depth Anything V3 Base (393 MB · Apache)"
+license = "Apache-2.0"
+commercial_ok = true
+size_mb = 393
+input_size = 518
+invert = false
+arch = "v3"
+tier = "base"
+files = [
+  { name = "model.onnx",      url = "https://huggingface.co/onnx-community/depth-anything-v3-base/resolve/main/onnx/model.onnx?download=true" },
+  { name = "model.onnx_data", url = "https://huggingface.co/onnx-community/depth-anything-v3-base/resolve/main/onnx/model.onnx_data?download=true" },
+]
+
+[[depth]]
+id = "da2-small"
+name = "Depth Anything V2 Small · int8 (28 MB · Apache)"
+license = "Apache-2.0"
+commercial_ok = true
+size_mb = 28
+input_size = 518
+invert = false
+arch = "v2"
+tier = "small"
+files = [
+  { name = "model_int8.onnx", url = "https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model_int8.onnx?download=true" },
+]
+
+[[depth]]
+id = "da2-base"
+name = "Depth Anything V2 Base · fp16 (195 MB · non-commercial)"
+license = "CC BY-NC 4.0"
+commercial_ok = false
+size_mb = 195
+input_size = 518
+invert = false
+arch = "v2"
+tier = "base"
+files = [
+  { name = "model_fp16.onnx", url = "https://huggingface.co/onnx-community/depth-anything-v2-base/resolve/main/onnx/model_fp16.onnx?download=true" },
+]
+
+[[depth]]
+id = "da2-large"
+name = "Depth Anything V2 Large · fp16 (669 MB · non-commercial)"
+license = "CC BY-NC 4.0"
+commercial_ok = false
+size_mb = 669
+input_size = 518
+invert = false
+arch = "v2"
+tier = "large"
+files = [
+  { name = "model_fp16.onnx", url = "https://huggingface.co/onnx-community/depth-anything-v2-large/resolve/main/onnx/model_fp16.onnx?download=true" },
+]
+
+# ── Subject-matte / segmentation models ──────────────────────────────────────
+
+[[segment]]
+id = "u2net"
+name = "U2-Net (balanced, 168 MB)"
+license = "Apache-2.0"
+commercial_ok = true
+size_mb = 168
+input_size = 320
+files = [
+  { name = "u2net.onnx", url = "https://huggingface.co/Heliosoph/u2net-onnx/resolve/main/u2net.onnx?download=true" },
+]
+
+[[segment]]
+id = "birefnet-lite"
+name = "BiRefNet Lite (sharper, 214 MB)"
+license = "MIT"
+commercial_ok = true
+size_mb = 214
+input_size = 1024
+files = [
+  { name = "model.onnx", url = "https://huggingface.co/onnx-community/BiRefNet_lite-ONNX/resolve/main/onnx/model.onnx?download=true" },
+]
+
+[[segment]]
+id = "birefnet"
+name = "BiRefNet Full (highest quality, 927 MB)"
+license = "MIT"
+commercial_ok = true
+size_mb = 927
+input_size = 1024
+files = [
+  { name = "model.onnx", url = "https://huggingface.co/onnx-community/BiRefNet-ONNX/resolve/main/onnx/model.onnx?download=true" },
+]
+
+# ── Inpainting (Cinematic background fill) ───────────────────────────────────
+
+[[inpaint]]
+id = "lama"
+name = "LaMa (background inpaint, 199 MB)"
+license = "Apache-2.0"
+commercial_ok = true
+size_mb = 199
+input_size = 512
+files = [
+  { name = "lama_fp32.onnx", url = "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx?download=true" },
+]
+
+# ── Upscalers (restore detail to the inpainted background fill) ───────────────
+
+[[upscale]]
+id = "realesrgan-x4"
+name = "Real-ESRGAN x4 (inpaint detail, 64 MB)"
+license = "BSD-3-Clause"
+commercial_ok = true
+size_mb = 64
+input_size = 128   # fixed 128→512 tile; the fill is upscaled in 128-px tiles
+files = [
+  { name = "model.onnx", url = "https://huggingface.co/qualcomm/Real-ESRGAN-x4plus/resolve/01179a4da7bf5ac91faca650e6afbf282ac93933/Real-ESRGAN-x4plus.onnx?download=true" },
+]

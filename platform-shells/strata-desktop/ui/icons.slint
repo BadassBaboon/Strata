@@ -1,0 +1,66 @@
+// Lucide icons (stroke #ffffff in the source SVGs) rendered as Slint images and
+// re-tinted per theme via `colorize`.  @image-url needs a string literal, so we
+// fan out on `name` with one Image per icon.  Call site: Icon { name: "zap"; ... }
+
+export component Icon {
+    in property <string> name;
+    in property <color>  color: #ffffff;
+    in property <length> size: 20px;
+
+    width: size;
+    height: size;
+
+    if name == "library":     Image { source: @image-url("../../../assets/icons/library.svg");     colorize: root.color; width: 100%; height: 100%; }
+    if name == "layers":      Image { source: @image-url("../../../assets/icons/layers.svg");      colorize: root.color; width: 100%; height: 100%; }
+    if name == "sparkles":    Image { source: @image-url("../../../assets/icons/sparkles.svg");    colorize: root.color; width: 100%; height: 100%; }
+    if name == "activity":    Image { source: @image-url("../../../assets/icons/activity.svg");    colorize: root.color; width: 100%; height: 100%; }
+    if name == "settings-2":  Image { source: @image-url("../../../assets/icons/settings-2.svg");  colorize: root.color; width: 100%; height: 100%; }
+    if name == "log-out":     Image { source: @image-url("../../../assets/icons/log-out.svg");     colorize: root.color; width: 100%; height: 100%; }
+    if name == "search":      Image { source: @image-url("../../../assets/icons/search.svg");      colorize: root.color; width: 100%; height: 100%; }
+    if name == "plus":        Image { source: @image-url("../../../assets/icons/plus.svg");        colorize: root.color; width: 100%; height: 100%; }
+    if name == "chevron-down":Image { source: @image-url("../../../assets/icons/chevron-down.svg");colorize: root.color; width: 100%; height: 100%; }
+    if name == "check":       Image { source: @image-url("../../../assets/icons/check.svg");       colorize: root.color; width: 100%; height: 100%; }
+    if name == "filter":      Image { source: @image-url("../../../assets/icons/filter.svg");      colorize: root.color; width: 100%; height: 100%; }
+    if name == "monitor":     Image { source: @image-url("../../../assets/icons/monitor.svg");     colorize: root.color; width: 100%; height: 100%; }
+    if name == "tag":         Image { source: @image-url("../../../assets/icons/tag.svg");         colorize: root.color; width: 100%; height: 100%; }
+    if name == "refresh-cw":  Image { source: @image-url("../../../assets/icons/refresh-cw.svg");  colorize: root.color; width: 100%; height: 100%; }
+    if name == "eye-off":     Image { source: @image-url("../../../assets/icons/eye-off.svg");     colorize: root.color; width: 100%; height: 100%; }
+    if name == "zap":         Image { source: @image-url("../../../assets/icons/zap.svg");         colorize: root.color; width: 100%; height: 100%; }
+    if name == "palette":     Image { source: @image-url("../../../assets/icons/palette.svg");     colorize: root.color; width: 100%; height: 100%; }
+    if name == "sun":         Image { source: @image-url("../../../assets/icons/sun.svg");         colorize: root.color; width: 100%; height: 100%; }
+    if name == "moon":        Image { source: @image-url("../../../assets/icons/moon.svg");        colorize: root.color; width: 100%; height: 100%; }
+    if name == "laptop":      Image { source: @image-url("../../../assets/icons/laptop.svg");      colorize: root.color; width: 100%; height: 100%; }
+    if name == "puzzle":      Image { source: @image-url("../../../assets/icons/puzzle.svg");      colorize: root.color; width: 100%; height: 100%; }
+    if name == "arrow-up-circle": Image { source: @image-url("../../../assets/icons/arrow-up-circle.svg"); colorize: root.color; width: 100%; height: 100%; }
+    if name == "save":        Image { source: @image-url("../../../assets/icons/save.svg");        colorize: root.color; width: 100%; height: 100%; }
+    if name == "info":        Image { source: @image-url("../../../assets/icons/info.svg");        colorize: root.color; width: 100%; height: 100%; }
+    if name == "clock":       Image { source: @image-url("../../../assets/icons/clock.svg");       colorize: root.color; width: 100%; height: 100%; }
+    if name == "database":    Image { source: @image-url("../../../assets/icons/database.svg");    colorize: root.color; width: 100%; height: 100%; }
+    if name == "terminal":    Image { source: @image-url("../../../assets/icons/terminal.svg");    colorize: root.color; width: 100%; height: 100%; }
+    if name == "copy":        Image { source: @image-url("../../../assets/icons/copy.svg");        colorize: root.color; width: 100%; height: 100%; }
+    if name == "search-code": Image { source: @image-url("../../../assets/icons/search-code.svg"); colorize: root.color; width: 100%; height: 100%; }
+    if name == "cpu":         Image { source: @image-url("../../../assets/icons/cpu.svg");         colorize: root.color; width: 100%; height: 100%; }
+    if name == "pencil":      Image { source: @image-url("../../../assets/icons/pencil.svg");      colorize: root.color; width: 100%; height: 100%; }
+    if name == "eye":         Image { source: @image-url("../../../assets/icons/eye.svg");         colorize: root.color; width: 100%; height: 100%; }
+    if name == "trash-2":     Image { source: @image-url("../../../assets/icons/trash-2.svg");     colorize: root.color; width: 100%; height: 100%; }
+    if name == "chevron-up":  Image { source: @image-url("../../../assets/icons/chevron-up.svg");  colorize: root.color; width: 100%; height: 100%; }
+    if name == "move":        Image { source: @image-url("../../../assets/icons/move.svg");        colorize: root.color; width: 100%; height: 100%; }
+    if name == "maximize":    Image { source: @image-url("../../../assets/icons/maximize.svg");    colorize: root.color; width: 100%; height: 100%; }
+    if name == "x":           Image { source: @image-url("../../../assets/icons/x.svg");           colorize: root.color; width: 100%; height: 100%; }
+    if name == "upload":      Image { source: @image-url("../../../assets/icons/upload.svg");      colorize: root.color; width: 100%; height: 100%; }
+    if name == "video":       Image { source: @image-url("../../../assets/icons/video.svg");       colorize: root.color; width: 100%; height: 100%; }
+    if name == "camera":      Image { source: @image-url("../../../assets/icons/camera.svg");      colorize: root.color; width: 100%; height: 100%; }
+}
+
+// Layered-prism brand mark. Two gradient variants — the dark logo's light strokes
+// vanish on a light sidebar, so swap to the light-background variant in light mode.
+export component AppLogo inherits Rectangle {
+    in property <bool> is-dark: true;
+    Image {
+        source: root.is-dark
+            ? @image-url("../../../assets/logo.svg")
+            : @image-url("../../../assets/logo_light.svg");
+        image-fit: contain;
+        width: 100%; height: 100%;
+    }
+}

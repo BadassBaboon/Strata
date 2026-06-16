@@ -1,0 +1,2789 @@
+﻿import { Button, VerticalBox, HorizontalBox, LineEdit, ScrollView, Slider, ComboBox, TextEdit, Palette } from "std-widgets.slint";
+import { Icon, AppLogo } from "icons.slint";
+
+// Bundled fonts — embedded at compile time so "Inter" / "Space Grotesk" /
+// "Source Code Pro" resolve without the fonts being installed system-wide.
+import "../../../assets/fonts/inter-v20-latin-regular.ttf";
+import "../../../assets/fonts/inter-v20-latin-500.ttf";
+import "../../../assets/fonts/inter-v20-latin-600.ttf";
+import "../../../assets/fonts/inter-v20-latin-700.ttf";
+import "../../../assets/fonts/inter-v20-latin-800.ttf";
+import "../../../assets/fonts/space-grotesk-v22-latin-500.ttf";
+import "../../../assets/fonts/space-grotesk-v22-latin-600.ttf";
+import "../../../assets/fonts/space-grotesk-v22-latin-700.ttf";
+import "../../../assets/fonts/source-code-pro-v31-latin-regular.ttf";
+import "../../../assets/fonts/source-code-pro-v31-latin-600.ttf";
+
+// â"€â"€ Theme â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+export struct ThemePalette {
+    background: brush,
+    sidebar: brush,
+    card: brush,
+    card-hover: brush,
+    text: brush,
+    text-muted: brush,
+    accent: brush,
+    accent-dim: brush,
+    selection: brush,
+    danger: brush,
+    border: brush,
+}
+
+export global L10n {
+    out property <string> app-name:          "Strata";
+    out property <string> app-tagline:       "WALLPAPER ENGINE";
+    out property <string> tab-library:       "Library";
+    out property <string> tab-compositor:    "Compositor";
+    out property <string> tab-parallax:      "Parallax Studio";
+    out property <string> tab-settings:      "Settings";
+    out property <string> tab-diagnostics:   "Diagnostics";
+    out property <string> btn-quit:          "Quit";
+    out property <string> btn-import:        "Import Shader";
+    out property <string> search-placeholder:"Search shaders and tags...";
+    out property <string> no-wallpapers:     "No wallpapers found. Click Import to add one.";
+
+    // Header titles + subtitles (mirrors the prototype's page.tsx header copy).
+    out property <string> title-library:      "Wallpaper Library";
+    out property <string> sub-library:        "Manage your high-fidelity motion assets and auto-tagged collections.";
+    out property <string> title-compositor:   "Display Compositor";
+    out property <string> sub-compositor:      "Intuitive layer stacking and cross-monitor spatial mapping.";
+    out property <string> title-parallax:     "Parallax Studio";
+    out property <string> sub-parallax:        "Create animated 3D parallax live wallpapers from images.";
+    out property <string> title-diagnostics:  "Engine Diagnostics";
+    out property <string> sub-diagnostics:     "Real-time telemetry and shader performance analysis.";
+    out property <string> title-settings:     "Engine Settings";
+    out property <string> sub-settings:        "Configure engine core and integration parameters.";
+}
+
+export global Theme {
+    in property <bool>   is-dark: true;
+    in property <string> mode:    "dark"; // "dark" | "light" | "system"
+
+    // Typography tokens — registered at startup from assets/fonts/*.ttf.
+    out property <string> font-headline: "Space Grotesk";
+    out property <string> font-body:     "Inter";
+    out property <string> font-code:     "Source Code Pro";
+
+    // Palette ported 1:1 from the ui-prototype's HSL design system (globals.css),
+    // converted to hex. Dark = "iOS Dark / Refined Grey", Light = "iOS Light".
+    out property <ThemePalette> palette: root.is-dark ? {
+        background:  #111317,
+        sidebar:     #16191f,
+        card:        #1e2229,
+        card-hover:  #272b35,
+        text:        #f9fafb,
+        text-muted:  #94a3b8,
+        accent:      #0a85ff,
+        accent-dim:  #14385c,
+        selection:   #10b981,
+        danger:      #ba2c2c,
+        border:      #2b303b,
+    } : {
+        background:  #f3f5f7,
+        sidebar:     #e9edf1,
+        card:        #ffffff,
+        card-hover:  #f0f1f5,
+        text:        #0f1729,
+        text-muted:  #65758b,
+        accent:      #0080ff,
+        accent-dim:  #bfdbfe,
+        selection:   #059669,
+        danger:      #ef4343,
+        border:      #cdd7e5,
+    };
+}
+
+// Monitor "hardware color tag" → concrete color (matches the prototype's set).
+export global MonColors {
+    public pure function of(name: string) -> color {
+        return name == "orange"  ? #f97316
+             : name == "blue"    ? #3b82f6
+             : name == "purple"  ? #a855f7
+             : name == "emerald" ? #10b981
+             : name == "rose"    ? #f43f5e
+             : Theme.palette.accent;
+    }
+}
+
+// â"€â"€ Shared data structs â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+export struct WallpaperItem {
+    name:          string,
+    author:        string,
+    tags:          [string],
+    visible:       bool,
+    has-thumbnail: bool,
+    thumbnail:     image,
+    usage-counts:  [int],
+    is-selected:   bool,
+    is-active:     bool,   // applied to at least one monitor
+    is-parallax:   bool,   // shader vs parallax asset (badge)
+}
+
+export struct LayerItem {
+    name:             string,
+    opacity:          float,
+    resolution-scale: float,
+    positioning:      string,
+    visible:          bool,
+    blend-mode:       string,   // normal | additive | multiply
+    x: float, y: float, width: float, height: float,
+}
+
+export struct LogEntry {
+    time:    string,
+    level:   string,   // INFO | WARN | ERROR | DEBUG
+    message: string,
+}
+
+export struct MonitorItem {
+    id: string, name: string,
+    color: string,   // orange | blue | purple | emerald | rose
+    width: int, height: int,
+    x: int, y: int,
+}
+
+export struct ToastData {
+    id: int,
+    title: string,
+    description: string,
+    destructive: bool,   // true → error styling (e.g. failed to apply shader)
+}
+
+// â"€â"€ Small reusable components â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.is-dark ? #ffffff14 : #00000014;
+}
+
+
+component SidebarButton inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool>   active;
+    in property <bool>   danger: false;
+    callback clicked();
+
+    height: 44px;
+    border-radius: 10px;
+    background: active ? Theme.palette.accent.with-alpha(0.12)
+              : (ta.has-hover ? (danger ? Theme.palette.danger.with-alpha(0.12)
+                                        : (Theme.is-dark ? #ffffff0d : #00000008))
+                              : transparent);
+    animate background { duration: 250ms; easing: ease; }
+
+    // Active accent bar on the left edge.
+    Rectangle {
+        x: 0; y: (parent.height - 24px) / 2;
+        width: 3px; height: active ? 24px : 0px;
+        border-radius: 2px;
+        background: Theme.palette.accent;
+        animate height { duration: 200ms; easing: ease-out; }
+    }
+
+    ta := TouchArea { clicked => { root.clicked(); } mouse-cursor: pointer; }
+
+    HorizontalLayout {
+        padding-left: 16px; padding-right: 16px; spacing: 12px; alignment: start;
+        Icon {
+            name: root.icon; size: 20px;
+            color: active ? Theme.palette.accent
+                 : (danger && ta.has-hover ? Theme.palette.danger
+                    : (ta.has-hover ? Theme.palette.text : Theme.palette.text-muted));
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: root.text;
+            color: active ? Theme.palette.accent
+                 : (danger && ta.has-hover ? Theme.palette.danger
+                    : (ta.has-hover ? Theme.palette.text : Theme.palette.text-muted));
+            font-family: Theme.font-body;
+            font-size: 14px;
+            font-weight: active ? 700 : 500;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component Toggle inherits Rectangle {
+    in-out property <bool> checked;
+    in property <bool> enabled: true;
+    callback toggled(bool);
+
+    width: 40px; height: 22px; border-radius: 11px;
+    opacity: enabled ? 1.0 : 0.4;
+    background: checked ? Theme.palette.accent : (Theme.is-dark ? #444450 : #c0c0cc);
+    animate background { duration: 150ms; easing: ease; }
+
+    Rectangle {
+        x: checked ? 20px : 2px;
+        y: 3px; width: 16px; height: 16px;
+        border-radius: 8px;
+        background: #ffffff;
+        drop-shadow-blur: checked ? 2px : 0px;
+        drop-shadow-color: #00000044;
+        animate x { duration: 150ms; easing: ease-in-out; }
+    }
+    TouchArea {
+        clicked => { if (root.enabled) { root.checked = !root.checked; root.toggled(root.checked); } }
+        mouse-cursor: root.enabled ? pointer : default;
+    }
+}
+
+
+// Accent-colored slider with full control over the thumb position, so it can
+// snap to discrete values (the std Slider can't be themed/snapped reliably).
+// `value` is display-only (driven by the parent); drags emit `changed(raw)`.
+component AccentSlider inherits Rectangle {
+    in property <float> minimum: 0;
+    in property <float> maximum: 100;
+    in property <float> value: 0;
+    callback changed(float);
+
+    height: 24px;
+    property <length> thumb-size: 18px;
+    property <float> ratio: (root.maximum - root.minimum) > 0
+        ? Math.max(0, Math.min(1, (root.value - root.minimum) / (root.maximum - root.minimum)))
+        : 0;
+
+    function set-from-x(mx: length) {
+        root.changed(root.minimum + Math.max(0, Math.min(1, mx / root.width)) * (root.maximum - root.minimum));
+    }
+
+    // Track + filled portion
+    Rectangle {
+        y: (parent.height - 6px) / 2;
+        height: 6px; border-radius: 3px;
+        background: Theme.is-dark ? #ffffff1f : #00000017;
+        Rectangle {
+            x: 0; y: 0; height: 100%;
+            width: parent.width * root.ratio;
+            border-radius: 3px;
+            background: Theme.palette.accent;
+        }
+    }
+    // Thumb
+    Rectangle {
+        width: thumb-size; height: thumb-size; border-radius: thumb-size / 2;
+        x: (root.width - thumb-size) * root.ratio;
+        y: (parent.height - thumb-size) / 2;
+        background: #ffffff;
+        border-width: 2px; border-color: Theme.palette.accent;
+        drop-shadow-blur: 4px; drop-shadow-color: #00000040;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        moved => { if (self.pressed) { root.set-from-x(self.mouse-x); } }
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                root.set-from-x(self.mouse-x);
+            }
+        }
+    }
+}
+
+// â"€â"€ Settings building blocks â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+// Uppercase tracked section heading with an accent icon (matches the prototype).
+component SectionLabel inherits HorizontalLayout {
+    in property <string> text;
+    in property <string> icon;
+    spacing: 10px; alignment: start;
+    Icon { name: root.icon; size: 16px; color: Theme.palette.accent; y: (parent.height - self.height)/2; }
+    Text {
+        text: root.text;
+        color: Theme.palette.text-muted;
+        font-size: 10px; font-weight: 800; letter-spacing: 3px;
+        vertical-alignment: center;
+    }
+}
+
+// Solid rounded panel (the prototype's glass-panel → solid card, no fake blur).
+component SettingsPanel inherits Rectangle {
+    in property <bool> disabled: false;
+    border-radius: 24px;
+    background: Theme.palette.card;
+    border-width: 1px;
+    border-color: Theme.palette.border;
+    opacity: disabled ? 0.5 : 1.0;
+    VerticalLayout {
+        padding: 28px; spacing: 22px;
+        @children
+    }
+}
+
+// Theme-mode pick button (icon over/with label, active = accent ring + tint).
+component ThemeModeButton inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool>   active;
+    callback clicked();
+    height: 60px;
+    border-radius: 16px;
+    border-width: 2px;
+    border-color: active ? Theme.palette.accent : Theme.palette.border;
+    background: active ? Theme.palette.accent.with-alpha(0.08)
+              : (ta.has-hover ? Theme.palette.card-hover : transparent);
+    animate border-color, background { duration: 150ms; }
+    HorizontalLayout {
+        alignment: center; spacing: 10px;
+        Icon { name: root.icon; size: 18px; color: active ? Theme.palette.accent : Theme.palette.text; y: (parent.height - self.height)/2; }
+        Text {
+            text: root.text;
+            color: active ? Theme.palette.accent : Theme.palette.text;
+            font-size: 14px; font-weight: 600; vertical-alignment: center;
+        }
+    }
+    ta := TouchArea { clicked => { root.clicked(); } mouse-cursor: pointer; }
+}
+
+// Custom dropdown select (rounded card field + popup list) to match the prototype.
+component Select inherits Rectangle {
+    in property <[string]> options;
+    in-out property <string> current;
+    callback selected(string);
+    height: 48px;
+    border-radius: 12px;
+    background: Theme.palette.card;
+    border-width: 1px;
+    border-color: sel-ta.has-hover ? Theme.palette.accent : Theme.palette.border;
+    animate border-color { duration: 150ms; }
+    HorizontalLayout {
+        padding-left: 16px; padding-right: 14px; spacing: 8px;
+        Text {
+            text: root.current; color: Theme.palette.text; font-size: 13px; font-weight: 600;
+            vertical-alignment: center; horizontal-stretch: 1; overflow: elide;
+        }
+        Icon { name: "chevron-down"; size: 16px; color: Theme.palette.text-muted; y: (parent.height - self.height)/2; }
+    }
+    sel-ta := TouchArea { clicked => { opt-popup.show(); } mouse-cursor: pointer; }
+    opt-popup := PopupWindow {
+        x: 0; y: parent.height + 6px; width: root.width;
+        Rectangle {
+            background: Theme.palette.card;
+            border-radius: 12px; border-width: 1px; border-color: Theme.palette.border;
+            drop-shadow-blur: 30px; drop-shadow-color: #00000066;
+            VerticalLayout {
+                padding: 6px; spacing: 2px;
+                for opt in root.options : Rectangle {
+                    height: 40px; border-radius: 9px;
+                    background: opt-ta.has-hover ? Theme.palette.accent.with-alpha(0.12)
+                              : (opt == root.current ? Theme.palette.accent.with-alpha(0.06) : transparent);
+                    HorizontalLayout {
+                        padding-left: 12px; padding-right: 12px; spacing: 8px;
+                        Text {
+                            text: opt; color: Theme.palette.text; font-size: 13px;
+                            font-weight: opt == root.current ? 700 : 500;
+                            vertical-alignment: center; horizontal-stretch: 1;
+                        }
+                        if opt == root.current : Icon { name: "check"; size: 16px; color: Theme.palette.accent; y: (parent.height - self.height)/2; }
+                    }
+                    opt-ta := TouchArea {
+                        clicked => { root.current = opt; root.selected(opt); }
+                        mouse-cursor: pointer;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// â"€â"€ Settings sections (each = SectionLabel + SettingsPanel) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// Extracted into components so the Settings tab can reflow between a two-column
+// (wide) and single-column (narrow) layout without duplicating the markup.
+
+component AppearanceSettings inherits VerticalLayout {
+    callback theme-changed(string);
+    spacing: 16px;
+    SectionLabel { icon: "palette"; text: "GENERAL APPEARANCE"; }
+    SettingsPanel {
+        Text { text: "Theme Mode"; font-family: Theme.font-headline; font-size: 18px; font-weight: 700; color: Theme.palette.text; }
+        HorizontalLayout {
+            spacing: 12px;
+            ThemeModeButton { horizontal-stretch: 1; icon: "sun"; text: "Light"; active: Theme.mode == "light"; clicked => { Theme.mode = "light"; root.theme-changed("light"); } }
+            ThemeModeButton { horizontal-stretch: 1; icon: "moon"; text: "Dark"; active: Theme.mode == "dark"; clicked => { Theme.mode = "dark"; root.theme-changed("dark"); } }
+            ThemeModeButton { horizontal-stretch: 1; icon: "laptop"; text: "System"; active: Theme.mode == "system"; clicked => { Theme.mode = "system"; root.theme-changed("system"); } }
+        }
+        Divider {}
+        HorizontalLayout {
+            spacing: 16px;
+            VerticalLayout {
+                horizontal-stretch: 1; spacing: 4px;
+                Text { text: "Adaptive UI Color Sync"; font-size: 16px; font-weight: 700; color: Theme.palette.text; }
+                Text { text: "Automatically synchronize UI theme with active wallpaper chroma. (Coming soon)"; font-size: 12px; color: Theme.palette.text-muted; wrap: word-wrap; }
+            }
+            VerticalLayout { alignment: center; Toggle { checked: false; enabled: false; } }
+        }
+    }
+}
+
+component IntegrationsSettings inherits VerticalLayout {
+    spacing: 16px;
+    SectionLabel { icon: "puzzle"; text: "INTEGRATIONS"; }
+    SettingsPanel {
+        disabled: true;
+        VerticalLayout {
+            spacing: 4px;
+            Text { text: "Spotify API Integration"; font-size: 15px; font-weight: 700; color: Theme.palette.text; }
+            Text { text: "Audio reactive shaders based on playback."; font-size: 12px; color: Theme.palette.text-muted; }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Rectangle {
+                horizontal-stretch: 1; height: 48px; border-radius: 12px;
+                background: Theme.palette.background; border-width: 1px; border-color: Theme.palette.border;
+                Text { x: 16px; text: "Enter Client Secret / API Key..."; color: Theme.palette.text-muted; font-size: 13px; vertical-alignment: center; }
+            }
+            Rectangle {
+                width: 48px; height: 48px; border-radius: 12px; background: Theme.palette.card-hover;
+                Icon { name: "save"; size: 16px; color: Theme.palette.text-muted; x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+            }
+        }
+        Divider {}
+        VerticalLayout {
+            spacing: 4px;
+            Text { text: "Steam Profile"; font-size: 15px; font-weight: 700; color: Theme.palette.text; }
+            Text { text: "Show profile stats and games owned on wallpapers."; font-size: 12px; color: Theme.palette.text-muted; }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Rectangle {
+                horizontal-stretch: 1; height: 48px; border-radius: 12px;
+                background: Theme.palette.background; border-width: 1px; border-color: Theme.palette.border;
+                Text { x: 16px; text: "USERNAME"; color: Theme.palette.text-muted; font-size: 13px; vertical-alignment: center; }
+            }
+            Rectangle {
+                width: 48px; height: 48px; border-radius: 12px; background: Theme.palette.card-hover;
+                Icon { name: "save"; size: 16px; color: Theme.palette.text-muted; x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+            }
+        }
+        Divider {}
+        HorizontalLayout {
+            spacing: 16px;
+            VerticalLayout {
+                horizontal-stretch: 1; spacing: 4px;
+                Text { text: "Discord Rich Presence"; font-size: 15px; font-weight: 700; color: Theme.palette.text; }
+                Text { text: "Display active wallpaper status on your profile."; font-size: 12px; color: Theme.palette.text-muted; }
+            }
+            VerticalLayout { alignment: center; Toggle { checked: false; enabled: false; } }
+        }
+    }
+}
+
+component SystemControlSettings inherits VerticalLayout {
+    in property <bool>   autostart;
+    in property <int>    fps-cap;
+    in property <string> shader-quality;
+    in property <string> vsync-mode;
+    callback autostart-toggled(bool);
+    callback fps-cap-changed(int);
+    callback shader-quality-changed(string);
+    callback vsync-changed(string);
+
+    pure function snap-fps(v: float) -> int {
+        return Math.abs(v - 30) <= 3 ? 30
+             : Math.abs(v - 60) <= 3 ? 60
+             : Math.abs(v - 90) <= 3 ? 90
+             : Math.abs(v - 120) <= 3 ? 120
+             : Math.round(v);
+    }
+
+    spacing: 16px;
+    SectionLabel { icon: "settings-2"; text: "SYSTEM CONTROL"; }
+    SettingsPanel {
+        // Launch at Startup
+        HorizontalLayout {
+            spacing: 16px;
+            VerticalLayout {
+                horizontal-stretch: 1; spacing: 4px;
+                Text { text: "Launch at Startup"; font-size: 15px; font-weight: 700; color: Theme.palette.text; }
+                Text { text: "Auto-start the engine when system boots."; font-size: 12px; color: Theme.palette.text-muted; }
+            }
+            VerticalLayout { alignment: center; Toggle { checked: root.autostart; toggled(v) => { root.autostart-toggled(v); } } }
+        }
+        Divider {}
+        // Target FPS
+        VerticalLayout {
+            spacing: 16px;
+            HorizontalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    horizontal-stretch: 1; spacing: 8px; alignment: start;
+                    Icon { name: "activity"; size: 16px; color: Theme.palette.accent; y: (parent.height - self.height)/2; }
+                    Text { text: "Target FPS"; font-size: 15px; font-weight: 700; color: Theme.palette.text; vertical-alignment: center; }
+                }
+                Rectangle {
+                    height: 22px; width: fps-b.preferred-width + 18px; border-radius: 6px;
+                    background: Theme.palette.accent.with-alpha(0.1);
+                    border-width: 1px; border-color: Theme.palette.accent.with-alpha(0.25);
+                    fps-b := Text { text: root.fps-cap + " FPS"; color: Theme.palette.accent; font-size: 10px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+            AccentSlider {
+                minimum: 1; maximum: 144; value: root.fps-cap;
+                changed(v) => { root.fps-cap-changed(root.snap-fps(v)); }
+            }
+            HorizontalLayout {
+                Text { text: "1 FPS"; font-size: 9px; font-weight: 800; letter-spacing: 1px; color: Theme.palette.text-muted; horizontal-stretch: 1; }
+                Text { text: "30"; font-size: 9px; font-weight: 800; color: root.fps-cap == 30 ? Theme.palette.accent : Theme.palette.text-muted; }
+                Rectangle { width: 12px; }
+                Text { text: "60"; font-size: 9px; font-weight: 800; color: root.fps-cap == 60 ? Theme.palette.accent : Theme.palette.text-muted; }
+                Rectangle { width: 12px; }
+                Text { text: "90"; font-size: 9px; font-weight: 800; color: root.fps-cap == 90 ? Theme.palette.accent : Theme.palette.text-muted; }
+                Rectangle { width: 12px; }
+                Text { text: "120"; font-size: 9px; font-weight: 800; color: root.fps-cap == 120 ? Theme.palette.accent : Theme.palette.text-muted; }
+                Text { text: "144 FPS"; font-size: 9px; font-weight: 800; letter-spacing: 1px; color: Theme.palette.text-muted; horizontal-stretch: 1; horizontal-alignment: right; }
+            }
+        }
+        Divider {}
+        // Shader Quality — global render-scale preset (Low/Medium/High).
+        VerticalLayout {
+            spacing: 12px;
+            HorizontalLayout {
+                spacing: 8px; alignment: start;
+                Icon { name: "zap"; size: 16px; color: Theme.palette.accent; y: (parent.height - self.height)/2; }
+                Text { text: "Shader Quality"; font-size: 15px; font-weight: 700; color: Theme.palette.text; vertical-alignment: center; }
+            }
+            Select {
+                options: ["Low (Performance Mode)", "Medium (Balanced)", "High (Maximum Fidelity)"];
+                current: root.shader-quality;
+                selected(v) => { root.shader-quality-changed(v); }
+            }
+        }
+        Divider {}
+        // V-Sync Mode
+        VerticalLayout {
+            spacing: 12px;
+            Text { text: "V-Sync Mode"; font-size: 15px; font-weight: 700; color: Theme.palette.text; }
+            Select {
+                options: ["Fifo (VSync On)", "Immediate (VSync Off)", "Mailbox (Ultra-Fast)"];
+                current: root.vsync-mode;
+                selected(v) => { root.vsync-changed(v); }
+            }
+        }
+    }
+}
+
+// Audio + mouse interactivity controls, grouped into one section.
+component InteractivitySettings inherits VerticalLayout {
+    in property <float> audio-sensitivity;
+    in property <bool>  mouse-interactive;
+    in property <float> mouse-sensitivity;
+    callback audio-sensitivity-changed(float);
+    callback mouse-interactive-toggled(bool);
+    callback mouse-sensitivity-changed(float);
+
+    spacing: 16px;
+    SectionLabel { icon: "activity"; text: "INTERACTIVITY"; }
+    SettingsPanel {
+        // ── Audio Sensitivity ──
+        VerticalLayout {
+            spacing: 12px;
+            HorizontalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    horizontal-stretch: 1; spacing: 8px; alignment: start;
+                    Icon { name: "activity"; size: 16px; color: Theme.palette.accent; y: (parent.height - self.height)/2; }
+                    Text { text: "Audio Sensitivity"; font-size: 15px; font-weight: 700; color: Theme.palette.text; vertical-alignment: center; }
+                }
+                Rectangle {
+                    height: 22px; width: arst-txt.preferred-width + 16px; border-radius: 6px;
+                    background: arst-ta.has-hover ? Theme.palette.card-hover : Theme.palette.card;
+                    border-width: 1px; border-color: Theme.palette.border;
+                    arst-txt := Text { text: "Reset"; color: Theme.palette.text-muted; font-size: 10px; font-weight: 800;
+                                      horizontal-alignment: center; vertical-alignment: center; }
+                    arst-ta := TouchArea { clicked => { root.audio-sensitivity-changed(1.0); } }
+                }
+                Rectangle {
+                    height: 22px; width: aud-b.preferred-width + 18px; border-radius: 6px;
+                    background: Theme.palette.accent.with-alpha(0.1);
+                    border-width: 1px; border-color: Theme.palette.accent.with-alpha(0.25);
+                    aud-b := Text { text: Math.round(root.audio-sensitivity * 100) + "%"; color: Theme.palette.accent; font-size: 10px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+            Text { text: "How strongly wallpapers react to system audio."; font-size: 12px; color: Theme.palette.text-muted; }
+            AccentSlider {
+                minimum: 0; maximum: 300; value: root.audio-sensitivity * 100;
+                changed(v) => { root.audio-sensitivity-changed(v / 100); }
+            }
+        }
+        Divider {}
+        // ── Mouse Interactivity toggle ──
+        HorizontalLayout {
+            spacing: 16px;
+            VerticalLayout {
+                horizontal-stretch: 1; spacing: 4px;
+                Text { text: "Mouse Interactivity"; font-size: 15px; font-weight: 700; color: Theme.palette.text; }
+                Text { text: "Feed the desktop cursor into interactive shaders (e.g. 1D Radial Lightmap)."; font-size: 12px; color: Theme.palette.text-muted; wrap: word-wrap; }
+            }
+            VerticalLayout { alignment: center; Toggle { checked: root.mouse-interactive; toggled(v) => { root.mouse-interactive-toggled(v); } } }
+        }
+        // ── Mouse Sensitivity (only relevant when enabled) ──
+        VerticalLayout {
+            spacing: 12px;
+            opacity: root.mouse-interactive ? 1.0 : 0.45;
+            HorizontalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    horizontal-stretch: 1; spacing: 8px; alignment: start;
+                    Icon { name: "move"; size: 16px; color: Theme.palette.accent; y: (parent.height - self.height)/2; }
+                    Text { text: "Mouse Sensitivity"; font-size: 15px; font-weight: 700; color: Theme.palette.text; vertical-alignment: center; }
+                }
+                Rectangle {
+                    height: 22px; width: mrst-txt.preferred-width + 16px; border-radius: 6px;
+                    background: mrst-ta.has-hover ? Theme.palette.card-hover : Theme.palette.card;
+                    border-width: 1px; border-color: Theme.palette.border;
+                    mrst-txt := Text { text: "Reset"; color: Theme.palette.text-muted; font-size: 10px; font-weight: 800;
+                                      horizontal-alignment: center; vertical-alignment: center; }
+                    mrst-ta := TouchArea { clicked => { if (root.mouse-interactive) { root.mouse-sensitivity-changed(1.0); } } }
+                }
+                Rectangle {
+                    height: 22px; width: ms-b.preferred-width + 18px; border-radius: 6px;
+                    background: Theme.palette.accent.with-alpha(0.1);
+                    border-width: 1px; border-color: Theme.palette.accent.with-alpha(0.25);
+                    ms-b := Text { text: Math.round(root.mouse-sensitivity * 100) + "%"; color: Theme.palette.accent; font-size: 10px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+            AccentSlider {
+                minimum: 10; maximum: 400; value: root.mouse-sensitivity * 100;
+                changed(v) => { if (root.mouse-interactive) { root.mouse-sensitivity-changed(v / 100); } }
+            }
+        }
+    }
+}
+
+component UpdatesSettings inherits VerticalLayout {
+    spacing: 16px;
+    SectionLabel { icon: "arrow-up-circle"; text: "UPDATES"; }
+    SettingsPanel {
+        disabled: true;
+        HorizontalLayout {
+            spacing: 8px;
+            Text { text: "Strata Engine"; font-size: 15px; font-weight: 700; color: Theme.palette.text; vertical-alignment: center; horizontal-stretch: 1; }
+            Rectangle {
+                height: 20px; width: ver-b.preferred-width + 16px; border-radius: 6px;
+                background: Theme.palette.selection.with-alpha(0.12);
+                ver-b := Text { text: "v1.0.0 (LATEST)"; color: Theme.palette.selection; font-size: 9px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+            }
+        }
+        Rectangle {
+            height: 48px; border-radius: 12px; border-width: 1px; border-color: Theme.palette.border;
+            Text { text: "CHECK FOR UPDATES"; color: Theme.palette.text; font-size: 11px; font-weight: 800; letter-spacing: 1px; horizontal-alignment: center; vertical-alignment: center; }
+        }
+        Divider {}
+        HorizontalLayout {
+            spacing: 8px;
+            Text { text: "Asset Library"; font-size: 15px; font-weight: 700; color: Theme.palette.text; vertical-alignment: center; horizontal-stretch: 1; }
+            HorizontalLayout {
+                spacing: 4px; alignment: end;
+                Icon { name: "info"; size: 12px; color: Theme.palette.text-muted; y: (parent.height - self.height)/2; }
+                Text { text: "Last synced: 2m ago"; color: Theme.palette.text-muted; font-size: 10px; font-weight: 700; vertical-alignment: center; }
+            }
+        }
+        Rectangle {
+            height: 48px; border-radius: 12px; border-width: 1px; border-color: Theme.palette.border;
+            Text { text: "SYNC LIVE LIBRARY"; color: Theme.palette.text; font-size: 11px; font-weight: 800; letter-spacing: 1px; horizontal-alignment: center; vertical-alignment: center; }
+        }
+    }
+}
+
+// â"€â"€ Diagnostics building blocks â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+// A telemetry stat tile: icon chip + optional status badge, big value at bottom.
+component StatCard inherits Rectangle {
+    in property <string> icon;
+    in property <brush>  icon-bg;
+    in property <brush>  icon-color;
+    in property <string> label;
+    in property <string> value;
+    in property <string> unit;
+    in property <brush>  value-color: Theme.palette.text;
+    in property <string> badge;
+    in property <brush>  badge-color: Theme.palette.selection;
+
+    height: 150px;
+    border-radius: 24px;
+    background: Theme.palette.card;
+    border-width: 1px; border-color: Theme.palette.border;
+    drop-shadow-blur: 14px; drop-shadow-color: #00000022; drop-shadow-offset-y: 4px;
+
+    VerticalLayout {
+        padding: 24px; spacing: 0;
+        HorizontalLayout {
+            alignment: space-between;
+            Rectangle {
+                width: 40px; height: 40px; border-radius: 12px; background: icon-bg;
+                Icon { name: root.icon; size: 20px; color: root.icon-color; x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+            }
+            if root.badge != "" : Rectangle {
+                height: 20px; width: badge-txt.preferred-width + 16px; border-radius: 6px;
+                background: root.badge-color.with-alpha(0.12);
+                y: 0;
+                badge-txt := Text { text: root.badge; color: root.badge-color; font-size: 9px; font-weight: 800; letter-spacing: 1px;
+                       horizontal-alignment: center; vertical-alignment: center; }
+            }
+        }
+        Rectangle { vertical-stretch: 1; }
+        VerticalLayout {
+            spacing: 4px;
+            Text { text: root.label; color: Theme.palette.text-muted; font-size: 10px; font-weight: 800; letter-spacing: 2px; }
+            HorizontalLayout {
+                spacing: 6px; alignment: start;
+                Text { text: root.value; font-family: Theme.font-headline; font-size: 30px; font-weight: 700; color: root.value-color; }
+                if root.unit != "" : Text { text: root.unit; color: Theme.palette.text-muted; font-size: 13px; font-weight: 700; vertical-alignment: bottom; }
+            }
+        }
+    }
+}
+
+// Colored severity chip for a log line.
+component LogLevelBadge inherits Rectangle {
+    in property <string> level;
+    property <brush> c: root.level == "ERROR" ? Theme.palette.danger
+                      : root.level == "WARN"  ? #f59e0b
+                      : root.level == "DEBUG" ? #38bdf8
+                      : Theme.palette.accent;
+    height: 16px; width: lvl-txt.preferred-width + 12px; border-radius: 4px;
+    background: c.with-alpha(0.14);
+    lvl-txt := Text { text: root.level; color: root.c; font-size: 8px; font-weight: 800; letter-spacing: 1px;
+           horizontal-alignment: center; vertical-alignment: center; }
+}
+
+// FPS stat tile with live status badge (encapsulates the thresholds once so the
+// responsive 4-up / 2x2 layouts don't duplicate the logic).
+component FpsStatCard inherits StatCard {
+    in property <float> fps;
+    in property <bool> active: true;
+    icon: "zap";
+    icon-bg: Theme.palette.accent.with-alpha(0.1);
+    icon-color: Theme.palette.accent;
+    label: "FPS";
+    value: root.active ? "\{Math.round(root.fps)}" : "—";
+    value-color: !root.active ? Theme.palette.text-muted
+               : root.fps >= 50 ? Theme.palette.selection : root.fps >= 25 ? #f59e0b : Theme.palette.danger;
+    badge: !root.active ? "INACTIVE" : root.fps >= 50 ? "STABLE" : root.fps >= 25 ? "FAIR" : "LOW";
+    badge-color: !root.active ? Theme.palette.text-muted
+               : root.fps >= 50 ? Theme.palette.selection : root.fps >= 25 ? #f59e0b : Theme.palette.danger;
+}
+
+// Shader Debugger + Debug Overlay actions tile.
+component DebugActionsCard inherits Rectangle {
+    in property <bool> debug-overlay;
+    callback open-debugger();
+    callback debug-toggled(bool);
+
+    height: 150px; border-radius: 24px;
+    background: Theme.palette.card; border-width: 1px; border-color: Theme.palette.border;
+    drop-shadow-blur: 14px; drop-shadow-color: #00000022; drop-shadow-offset-y: 4px;
+    VerticalLayout {
+        padding: 20px; spacing: 14px; alignment: center;
+        Rectangle {
+            height: 44px; border-radius: 12px; border-width: 1px; border-color: Theme.palette.border;
+            background: dbg-ta.has-hover ? Theme.palette.card-hover : transparent;
+            animate background { duration: 150ms; }
+            HorizontalLayout {
+                alignment: center; spacing: 8px;
+                Icon { name: "search-code"; size: 16px; color: Theme.palette.text; y: (parent.height - self.height)/2; }
+                Text { text: "SHADER DEBUGGER"; color: Theme.palette.text; font-size: 11px; font-weight: 800; letter-spacing: 1px; vertical-alignment: center; }
+            }
+            dbg-ta := TouchArea { clicked => { root.open-debugger(); } mouse-cursor: pointer; }
+        }
+        HorizontalLayout {
+            alignment: space-between;
+            Text { text: "DEBUG OVERLAY"; color: Theme.palette.text-muted; font-size: 10px; font-weight: 800; letter-spacing: 1px; vertical-alignment: center; }
+            VerticalLayout { alignment: center; Toggle { checked: root.debug-overlay; toggled(v) => { root.debug-toggled(v); } } }
+        }
+    }
+}
+
+// â"€â"€ WallpaperCard â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+// ── Compositor building blocks ──────────────────────────────────────────────
+
+component SqBtn inherits Rectangle {
+    in property <string> icon;
+    in property <bool> danger: false;
+    callback clicked();
+    width: 30px; height: 30px; border-radius: 8px;
+    background: ta.has-hover ? (danger ? Theme.palette.danger.with-alpha(0.15) : Theme.palette.card-hover) : transparent;
+    animate background { duration: 120ms; }
+    Icon { name: root.icon; size: 15px;
+           color: danger && ta.has-hover ? Theme.palette.danger : Theme.palette.text-muted;
+           x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+    ta := TouchArea { clicked => { root.clicked(); } mouse-cursor: pointer; }
+}
+
+component MiniBtn inherits Rectangle {
+    in property <string> icon;
+    callback clicked();
+    width: 22px; height: 15px; border-radius: 4px;
+    background: ta.has-hover ? Theme.palette.card-hover : transparent;
+    Icon { name: root.icon; size: 11px; color: Theme.palette.text-muted;
+           x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+    ta := TouchArea { clicked => { root.clicked(); } mouse-cursor: pointer; }
+}
+
+// Spatial monitor canvas — positions each display to scale, supports select,
+// per-monitor rename/color, refresh, and the span switch.
+component CompositorCanvas inherits Rectangle {
+    in property <[MonitorItem]> monitors;
+    in property <int>  selected-index;
+    in property <bool> span;
+    in property <int>  canvas-min-x;
+    in property <int>  canvas-min-y;
+    in property <int>  canvas-max-x;
+    in property <int>  canvas-max-y;
+    // Spatial edit mode: layer index being edited (-1 = off) + draft box (monitor px).
+    in-out property <int>   editing-layer: -1;
+    in-out property <float> edit-x;
+    in-out property <float> edit-y;
+    in-out property <float> edit-w;
+    in-out property <float> edit-h;
+    callback monitor-selected(int);
+    callback refresh();
+    callback span-toggled(bool);
+    callback rename(int, string);
+    callback color-changed(int, string);
+    callback edit-save();
+    callback edit-cancel();
+    callback edit-live();
+
+    property <bool> editing: root.editing-layer >= 0 && root.selected-index >= 0;
+
+    // Theme-aware canvas chrome colors. The stage flips dark↔light, so its text,
+    // icons, chips and borders must flip too or they vanish (white-on-light).
+    property <color> fg:           Theme.is-dark ? #ffffff   : #1a1f2b;
+    property <color> fg-muted:     Theme.is-dark ? #ffffffaa : #5b6473;
+    property <color> fg-faint:     Theme.is-dark ? #ffffff55 : #00000066;
+    property <color> chip-bg:      Theme.is-dark ? #ffffff12 : #00000010;
+    property <color> chip-bg-hover:Theme.is-dark ? #ffffff22 : #0000001c;
+    property <color> chip-border:  Theme.is-dark ? #ffffff1a : #00000018;
+    property <color> tile-border:  Theme.is-dark ? #ffffff24 : #00000022;
+    property <color> tile-bg:      Theme.is-dark ? #ffffff08 : #00000008;
+
+    border-radius: 24px;
+    // Dark "stage" in dark mode; a light neutral surface in light mode so the
+    // spatial canvas matches the theme instead of always being black.
+    background: Theme.is-dark ? #0a0d13 : #e6eaf1;
+    border-width: 1px; border-color: Theme.palette.border;
+    clip: true;
+
+    property <int> tw: Math.max(1, root.canvas-max-x - root.canvas-min-x);
+    property <int> th: Math.max(1, root.canvas-max-y - root.canvas-min-y);
+    property <float> scale: Math.min((self.width - 120px) / (root.tw * 1px), (self.height - 150px) / (root.th * 1px));
+    property <length> x0: (self.width  - root.tw * root.scale * 1px) / 2;
+    property <length> y0: (self.height - root.th * root.scale * 1px) / 2;
+
+    // Single-monitor framing used while editing a layer's spatial box.
+    property <int> msel-w: root.selected-index >= 0 ? root.monitors[root.selected-index].width  : 1;
+    property <int> msel-h: root.selected-index >= 0 ? root.monitors[root.selected-index].height : 1;
+    property <float> em-scale: Math.min((self.width - 120px) / (root.msel-w * 1px), (self.height - 150px) / (root.msel-h * 1px));
+    property <length> em-x0: (self.width  - root.msel-w * root.em-scale * 1px) / 2;
+    property <length> em-y0: (self.height - root.msel-h * root.em-scale * 1px) / 2;
+
+    for m[i] in root.monitors : Rectangle {
+        visible: !root.editing;
+        property <color> mc: root.span && root.monitors.length > 0 ? MonColors.of(root.monitors[0].color) : MonColors.of(m.color);
+        property <bool> active: root.span ? true : (root.selected-index == i);
+        x: root.x0 + (m.x - root.canvas-min-x) * root.scale * 1px;
+        y: root.y0 + (m.y - root.canvas-min-y) * root.scale * 1px;
+        width:  m.width  * root.scale * 1px;
+        height: m.height * root.scale * 1px;
+        border-radius: 10px; border-width: 2px;
+        border-color: active ? mc : root.tile-border;
+        background: active ? mc.with-alpha(0.18) : root.tile-bg;
+        drop-shadow-blur: active ? 26px : 0px; drop-shadow-color: mc.with-alpha(0.35);
+        animate border-color, background, drop-shadow-blur { duration: 180ms; }
+
+        TouchArea { clicked => { if (!root.span) { root.monitor-selected(i); } } mouse-cursor: root.span ? default : pointer; }
+
+        VerticalLayout {
+            alignment: center; spacing: 5px;
+            HorizontalLayout { alignment: center; Icon { name: "monitor"; size: 28px; color: active ? mc : root.fg-muted; } }
+            // Persistent display-number badge (shown regardless of custom name).
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 22px; height: 22px; border-radius: 6px;
+                    background: active ? mc.with-alpha(0.25) : root.chip-bg;
+                    border-width: 1px; border-color: active ? mc : root.chip-border;
+                    Text { text: i + 1; color: active ? root.fg : root.fg-muted; font-size: 11px; font-weight: 800;
+                           horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+            Text { text: m.name; color: active ? root.fg : root.fg-muted; font-size: 11px; font-weight: 700; letter-spacing: 1px; horizontal-alignment: center; overflow: elide; }
+            Text { text: m.width + " x " + m.height; color: root.fg-faint; font-size: 9px; horizontal-alignment: center; }
+        }
+
+        if !root.span : Rectangle {
+            x: parent.width - 30px; y: 8px; width: 22px; height: 22px; border-radius: 6px;
+            background: ed-ta.has-hover ? #ffffff2e : #00000055;
+            Icon { name: "pencil"; size: 12px; color: #ffffffcc; x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+            ed-ta := TouchArea { clicked => { mon-pop.show(); } mouse-cursor: pointer; }
+            mon-pop := PopupWindow {
+                x: -188px; y: 26px; width: 220px;
+                // Don't close when the user clicks the name field inside the popup.
+                close-policy: PopupClosePolicy.close-on-click-outside;
+                Rectangle {
+                    background: Theme.palette.card; border-radius: 14px; border-width: 1px; border-color: Theme.palette.border;
+                    drop-shadow-blur: 30px; drop-shadow-color: #00000088;
+                    VerticalLayout {
+                        padding: 12px; spacing: 10px;
+                        Text { text: "CONFIGURE DISPLAY " + (i + 1); color: Theme.palette.text-muted; font-size: 9px; font-weight: 800; letter-spacing: 1px; }
+                        Rectangle {
+                            height: 38px; border-radius: 10px; clip: true;
+                            background: Theme.palette.background; border-width: 1px; border-color: Theme.palette.border;
+                            name-in := TextInput {
+                                x: 12px; width: parent.width - 24px; height: 100%;
+                                vertical-alignment: center; single-line: true;
+                                color: Theme.palette.text; font-size: 13px;
+                                text: m.name;
+                                edited => { root.rename(i, self.text); }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px; alignment: start;
+                            for c in ["orange", "blue", "purple", "emerald", "rose"] : Rectangle {
+                                width: 28px; height: 28px; border-radius: 8px;
+                                background: MonColors.of(c);
+                                border-width: 2px;
+                                border-color: m.color == c ? #ffffff : transparent;
+                                TouchArea { clicked => { root.color-changed(i, c); } mouse-cursor: pointer; }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Top-left badge
+    Rectangle {
+        visible: !root.editing;
+        x: 16px; y: 16px; height: 24px; width: badge-t.preferred-width + 24px; border-radius: 12px;
+        background: root.chip-bg; border-width: 1px; border-color: root.chip-border;
+        badge-t := Text { text: "SPATIAL CANVAS"; color: root.fg-muted; font-size: 9px; font-weight: 800; letter-spacing: 3px;
+               horizontal-alignment: center; vertical-alignment: center; }
+    }
+
+    // Top-right refresh
+    Rectangle {
+        visible: !root.editing;
+        x: parent.width - rf-row.preferred-width - 44px; y: 16px;
+        height: 36px; width: rf-row.preferred-width + 28px; border-radius: 10px;
+        background: rf-ta.has-hover ? root.chip-bg-hover : root.chip-bg; border-width: 1px; border-color: root.chip-border;
+        animate background { duration: 150ms; }
+        rf-row := HorizontalLayout {
+            padding-left: 12px; padding-right: 12px; spacing: 8px; alignment: center;
+            Icon { name: "refresh-cw"; size: 14px; color: root.fg-muted; y: (parent.height - self.height)/2; }
+            Text { text: "REFRESH MONITORS"; color: root.fg; font-size: 10px; font-weight: 800; letter-spacing: 1px; vertical-alignment: center; }
+        }
+        rf-ta := TouchArea { clicked => { root.refresh(); } mouse-cursor: pointer; }
+    }
+
+    // Bottom-right span switch
+    Rectangle {
+        visible: !root.editing;
+        x: parent.width - 250px; y: parent.height - 72px;
+        width: 234px; height: 54px; border-radius: 14px;
+        background: root.chip-bg; border-width: 1px; border-color: root.chip-border;
+        HorizontalLayout {
+            padding-left: 14px; padding-right: 14px; spacing: 10px;
+            VerticalLayout {
+                horizontal-stretch: 1; alignment: center; spacing: 2px;
+                Text { text: "SPAN MONITORS"; color: root.fg; font-size: 10px; font-weight: 800; letter-spacing: 1px; }
+                Text { text: "Treat displays as one canvas"; color: root.fg-muted; font-size: 8px; }
+            }
+            VerticalLayout { alignment: center; Toggle { checked: root.span; toggled(v) => { root.span-toggled(v); } } }
+        }
+    }
+
+    // â”€â”€ Spatial edit overlay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Framed monitor (visual backdrop only; clipped to itself).
+    if root.editing : Rectangle {
+        x: root.em-x0; y: root.em-y0;
+        width: root.msel-w * root.em-scale * 1px;
+        height: root.msel-h * root.em-scale * 1px;
+        border-radius: 8px; border-width: 2px; border-color: #ffffff30;
+        background: #ffffff08;
+        clip: true;
+    }
+
+    // Bounding box — a SIBLING of the frame (canvas coords) so it always renders
+    // on top and is never clipped, even when the frame fills a maximized window.
+    if root.editing : Rectangle {
+        x: root.em-x0 + root.edit-x * root.em-scale * 1px;
+        y: root.em-y0 + root.edit-y * root.em-scale * 1px;
+        width:  root.edit-w * root.em-scale * 1px;
+        height: root.edit-h * root.em-scale * 1px;
+        border-width: 2px; border-color: Theme.palette.accent;
+        background: Theme.palette.accent.with-alpha(0.20);
+        Rectangle {
+            x: 0; y: -22px; height: 18px; width: sz-t.preferred-width + 12px; border-radius: 4px;
+            background: Theme.palette.accent;
+            sz-t := Text { text: Math.round(root.edit-w) + " x " + Math.round(root.edit-h);
+                   color: #ffffff; font-size: 9px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+        }
+        HorizontalLayout { alignment: center; Icon { name: "move"; size: 18px; color: #ffffffcc; y: (parent.height - self.height)/2; } }
+        Rectangle {
+            x: parent.width - 12px; y: parent.height - 12px; width: 24px; height: 24px; border-radius: 12px;
+            background: Theme.palette.accent; border-width: 2px; border-color: #ffffff;
+            drop-shadow-blur: 6px; drop-shadow-color: #00000066;
+            Icon { name: "maximize"; size: 12px; color: #ffffff; x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+        }
+    }
+
+    // Input layer over the frame (canvas coords; hit-tests in frame-local space).
+    if root.editing : edit-ta := TouchArea {
+        x: root.em-x0; y: root.em-y0;
+        width: root.msel-w * root.em-scale * 1px;
+        height: root.msel-h * root.em-scale * 1px;
+        property <int> mode: 0;        // 0 none, 1 move, 2 resize
+        property <float> sx;
+        property <float> sy;
+        property <float> ddx: (self.mouse-x - self.pressed-x) / 1px / root.em-scale;
+        property <float> ddy: (self.mouse-y - self.pressed-y) / 1px / root.em-scale;
+        mouse-cursor: pointer;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                if (self.mouse-x > (root.edit-x + root.edit-w) * root.em-scale * 1px - 20px
+                    && self.mouse-y > (root.edit-y + root.edit-h) * root.em-scale * 1px - 20px) {
+                    self.mode = 2; self.sx = root.edit-w; self.sy = root.edit-h;
+                } else if (self.mouse-x > root.edit-x * root.em-scale * 1px
+                        && self.mouse-x < (root.edit-x + root.edit-w) * root.em-scale * 1px
+                        && self.mouse-y > root.edit-y * root.em-scale * 1px
+                        && self.mouse-y < (root.edit-y + root.edit-h) * root.em-scale * 1px) {
+                    self.mode = 1; self.sx = root.edit-x; self.sy = root.edit-y;
+                } else {
+                    self.mode = 0;
+                }
+            }
+            if (e.kind == PointerEventKind.up) { self.mode = 0; }
+        }
+        moved => {
+            if (self.pressed && self.mode == 1) {
+                root.edit-x = Math.max(0, Math.min(root.msel-w - root.edit-w, self.sx + self.ddx));
+                root.edit-y = Math.max(0, Math.min(root.msel-h - root.edit-h, self.sy + self.ddy));
+                root.edit-live();
+            } else if (self.pressed && self.mode == 2) {
+                root.edit-w = Math.max(100, Math.min(root.msel-w - root.edit-x, self.sx + self.ddx));
+                root.edit-h = Math.max(100, Math.min(root.msel-h - root.edit-y, self.sy + self.ddy));
+                root.edit-live();
+            }
+        }
+    }
+
+    // Edit toolbar (Save / Discard) — buttons vertically centered in the bar.
+    if root.editing : Rectangle {
+        x: (parent.width - tb-row.preferred-width - 32px) / 2; y: parent.height - 66px;
+        height: 46px; width: tb-row.preferred-width + 32px; border-radius: 14px;
+        background: Theme.palette.card; border-width: 1px; border-color: Theme.palette.border;
+        drop-shadow-blur: 24px; drop-shadow-color: #00000066;
+        tb-row := HorizontalLayout {
+            padding-left: 12px; padding-right: 12px; spacing: 10px; alignment: center;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 32px; width: cx-t.preferred-width + 28px; border-radius: 9px;
+                    background: cx-ta.has-hover ? Theme.palette.card-hover : transparent;
+                    border-width: 1px; border-color: Theme.palette.border;
+                    HorizontalLayout { alignment: center; spacing: 6px;
+                        Icon { name: "x"; size: 13px; color: Theme.palette.text-muted; y: (parent.height - self.height)/2; }
+                        cx-t := Text { text: "DISCARD"; color: Theme.palette.text; font-size: 10px; font-weight: 800; letter-spacing: 1px; vertical-alignment: center; }
+                    }
+                    cx-ta := TouchArea { clicked => { root.edit-cancel(); } mouse-cursor: pointer; }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 32px; width: sv-t.preferred-width + 28px; border-radius: 9px;
+                    background: sv-ta.has-hover ? Theme.palette.accent.brighter(0.12) : Theme.palette.accent;
+                    HorizontalLayout { alignment: center; spacing: 6px;
+                        Icon { name: "save"; size: 13px; color: #ffffff; y: (parent.height - self.height)/2; }
+                        sv-t := Text { text: "SAVE GEOMETRY"; color: #ffffff; font-size: 10px; font-weight: 800; letter-spacing: 1px; vertical-alignment: center; }
+                    }
+                    sv-ta := TouchArea { clicked => { root.edit-save(); } mouse-cursor: pointer; }
+                }
+            }
+        }
+    }
+}
+
+// Per-monitor shader layer stack (right panel).
+// The stacked layer cards (no scroll of its own — the host decides).
+component LayerList inherits VerticalLayout {
+    in property <[LayerItem]> layers;
+    callback move-up(int);
+    callback move-down(int);
+    callback remove(int);
+    callback opacity-changed(int, float);
+    callback blend-changed(int, string);
+    callback visibility-toggled(int, bool);
+    callback edit-requested(int);
+
+    spacing: 12px; alignment: start;
+    for layer[i] in root.layers : Rectangle {
+        background: Theme.palette.card; border-radius: 16px; border-width: 1px; border-color: Theme.palette.border;
+        VerticalLayout {
+            padding: 14px; spacing: 14px;
+            HorizontalLayout {
+                spacing: 4px;
+                Text { text: layer.name; color: layer.visible ? Theme.palette.text : Theme.palette.text-muted;
+                       font-size: 12px; font-weight: 800; letter-spacing: 1px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                VerticalLayout {
+                    alignment: center; spacing: 1px;
+                    MiniBtn { icon: "chevron-up";   clicked => { root.move-up(i); } }
+                    MiniBtn { icon: "chevron-down"; clicked => { root.move-down(i); } }
+                }
+                SqBtn { icon: "pencil"; clicked => { root.edit-requested(i); } }
+                SqBtn { icon: layer.visible ? "eye" : "eye-off"; clicked => { root.visibility-toggled(i, !layer.visible); } }
+                SqBtn { icon: "trash-2"; danger: true; clicked => { root.remove(i); } }
+            }
+            VerticalLayout {
+                spacing: 6px;
+                Text { text: "BLEND MODE"; color: Theme.palette.text-muted; font-size: 8px; font-weight: 800; letter-spacing: 1px; }
+                Select {
+                    options: ["Normal", "Additive", "Screen", "Multiply"];
+                    current: layer.blend-mode == "additive" ? "Additive"
+                           : layer.blend-mode == "screen"   ? "Screen"
+                           : layer.blend-mode == "multiply" ? "Multiply" : "Normal";
+                    selected(v) => { root.blend-changed(i, v == "Additive" ? "additive"
+                                                          : v == "Screen"   ? "screen"
+                                                          : v == "Multiply" ? "multiply" : "normal"); }
+                }
+            }
+            VerticalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    spacing: 6px;
+                    Icon { name: "zap"; size: 12px; color: Theme.palette.accent; y: (parent.height - self.height)/2; }
+                    Text { text: "OPACITY"; color: Theme.palette.text-muted; font-size: 9px; font-weight: 800; letter-spacing: 1px; vertical-alignment: center; horizontal-stretch: 1; }
+                    Text { text: Math.round(layer.opacity * 100) + "%"; color: Theme.palette.accent; font-size: 11px; font-weight: 700; vertical-alignment: center; }
+                }
+                AccentSlider { minimum: 0; maximum: 100; value: layer.opacity * 100; changed(v) => { root.opacity-changed(i, v / 100); } }
+            }
+        }
+    }
+    if root.layers.length == 0 : Rectangle {
+        height: 130px; border-radius: 16px;
+        background: Theme.is-dark ? #ffffff06 : #00000005; border-width: 1px; border-color: Theme.palette.border;
+        VerticalLayout {
+            alignment: center; spacing: 8px;
+            HorizontalLayout { alignment: center; Icon { name: "layers"; size: 28px; color: Theme.palette.text-muted.with-alpha(0.4); } }
+            Text { text: "No layers on this display"; color: Theme.palette.text-muted; font-size: 12px; horizontal-alignment: center; }
+            Text { text: "Assign a shader from the Library tab"; color: Theme.palette.accent; font-size: 11px; horizontal-alignment: center; }
+        }
+    }
+}
+
+component LayerStack inherits VerticalLayout {
+    in property <[LayerItem]> layers;
+    in property <string> monitor-name;
+    // When true the list scrolls internally (wide side-panel); when false it just
+    // stacks and the host page scrolls (narrow mode → a single scrollbar).
+    in property <bool> scrollable: true;
+    callback move-up(int);
+    callback move-down(int);
+    callback remove(int);
+    callback opacity-changed(int, float);
+    callback blend-changed(int, string);
+    callback visibility-toggled(int, bool);
+    callback edit-requested(int);
+
+    spacing: 16px;
+
+    Rectangle {
+        height: 60px; border-radius: 16px; background: Theme.palette.card; border-width: 1px; border-color: Theme.palette.border;
+        HorizontalLayout {
+            padding-left: 16px; padding-right: 16px; spacing: 12px;
+            VerticalLayout { alignment: center; Icon { name: "layers"; size: 18px; color: Theme.palette.accent; } }
+            VerticalLayout {
+                horizontal-stretch: 1; alignment: center; spacing: 1px;
+                Text { text: "LAYERS"; color: Theme.palette.text; font-size: 12px; font-weight: 800; letter-spacing: 2px; }
+                Text { text: root.monitor-name; color: Theme.palette.text-muted; font-size: 10px; overflow: elide; }
+            }
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 22px; width: cnt.preferred-width + 16px; border-radius: 6px; background: Theme.palette.accent.with-alpha(0.15);
+                    cnt := Text { text: root.layers.length + " ITEMS"; color: Theme.palette.accent; font-size: 9px; font-weight: 800;
+                           horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+        }
+    }
+
+    if root.scrollable : ScrollView {
+        vertical-stretch: 1;
+        LayerList {
+            layers: root.layers;
+            move-up(i) => { root.move-up(i); }
+            move-down(i) => { root.move-down(i); }
+            remove(i) => { root.remove(i); }
+            opacity-changed(i, o) => { root.opacity-changed(i, o); }
+            blend-changed(i, b) => { root.blend-changed(i, b); }
+            visibility-toggled(i, v) => { root.visibility-toggled(i, v); }
+            edit-requested(i) => { root.edit-requested(i); }
+        }
+    }
+    if !root.scrollable : LayerList {
+        layers: root.layers;
+        move-up(i) => { root.move-up(i); }
+        move-down(i) => { root.move-down(i); }
+        remove(i) => { root.remove(i); }
+        opacity-changed(i, o) => { root.opacity-changed(i, o); }
+        blend-changed(i, b) => { root.blend-changed(i, b); }
+        visibility-toggled(i, v) => { root.visibility-toggled(i, v); }
+        edit-requested(i) => { root.edit-requested(i); }
+    }
+}
+
+component WallpaperCard inherits Rectangle {
+    in property <string>  name;
+    in property <string>  author;
+    in property <[string]> tags;
+    in property <bool>    has-thumbnail;
+    in property <image>   thumbnail;
+    in property <[int]>   usage-counts;
+    in property <[MonitorItem]> monitors;
+    in property <bool>    is-active;
+    in property <bool>    is-parallax;
+    callback toggle-monitor(int);
+    callback delete-requested();
+
+    // Use each monitor's actual color tag (set in the Compositor) so the Library
+    // avatars / "Apply to" rows match the colors shown in the spatial canvas.
+    pure function mon-color(idx: int) -> color {
+        return MonColors.of(root.monitors[idx].color);
+    }
+
+    border-radius: 16px;
+    border-width: is-active ? 2px : 1px;
+    border-color: is-active ? Theme.palette.selection : Theme.palette.border;
+    background: Theme.palette.card;
+    drop-shadow-blur: is-active ? 30px : (card-ta.has-hover ? 26px : 14px);
+    drop-shadow-color: is-active ? Theme.palette.selection.with-alpha(0.30) : #00000038;
+    drop-shadow-offset-y: 8px;
+    clip: true;
+
+    animate border-color, drop-shadow-blur, drop-shadow-color { duration: 300ms; easing: ease; }
+
+    card-ta := TouchArea { mouse-cursor: default; }
+
+    VerticalLayout {
+        padding: 0; spacing: 0;
+
+        // â"€â"€ Preview band (16:10) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+        Rectangle {
+            height: root.width * 10 / 16;
+            clip: true;
+            background: Theme.is-dark ? #1a1d24 : #e4e8ef;
+
+            if has-thumbnail : Image {
+                source: root.thumbnail;
+                width: 100%; height: 100%;
+                image-fit: cover;
+            }
+            if !has-thumbnail : VerticalLayout {
+                alignment: center; spacing: 8px;
+                HorizontalLayout {
+                    alignment: center;
+                    Icon { name: "eye-off"; size: 30px; color: Theme.palette.text-muted.with-alpha(0.35); }
+                }
+                Text {
+                    text: "NO PREVIEW";
+                    color: Theme.palette.text-muted.with-alpha(0.6);
+                    font-size: 10px; font-weight: 800; letter-spacing: 3px;
+                    horizontal-alignment: center;
+                }
+            }
+            Rectangle {
+                y: parent.height - 48px; height: 48px; width: 100%;
+                background: @linear-gradient(180deg, transparent 0%, #000000aa 100%);
+            }
+
+            // Active pill (top-left)
+            if is-active : Rectangle {
+                x: 12px; y: 12px;
+                height: 22px; width: active-row.preferred-width + 20px;
+                border-radius: 11px;
+                background: Theme.palette.selection;
+                drop-shadow-blur: 12px; drop-shadow-color: Theme.palette.selection.with-alpha(0.4);
+                active-row := HorizontalLayout {
+                    padding-left: 10px; padding-right: 10px; spacing: 4px; alignment: center;
+                    Icon { name: "check"; size: 12px; color: #ffffff; y: (parent.height - self.height)/2; }
+                    Text { text: "ACTIVE"; color: #ffffff; font-size: 9px; font-weight: 800; letter-spacing: 1.5px; vertical-alignment: center; }
+                }
+            }
+
+            // Top-right: optional delete (parallax assets) + asset-type badge.
+            HorizontalLayout {
+                x: parent.width - self.preferred-width - 12px; y: 12px; spacing: 6px;
+
+                // Delete — only for Parallax Studio creations (user-generated).
+                if is-parallax : Rectangle {
+                    width: 32px; height: 32px; border-radius: 10px;
+                    background: del-ta.has-hover ? Theme.palette.danger : #00000066;
+                    border-width: 1px; border-color: #ffffff1a;
+                    animate background { duration: 150ms; }
+                    Icon { name: "trash-2"; size: 15px; color: #ffffff;
+                           x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+                    del-ta := TouchArea { clicked => { root.delete-requested(); } mouse-cursor: pointer; }
+                }
+
+                // Asset-type badge: blue "parallax" mark, or the shader zap.
+                Rectangle {
+                    width: 32px; height: 32px; border-radius: 10px;
+                    background: is-parallax ? #3b82f633 : #00000066;
+                    border-width: 1px; border-color: is-parallax ? #3b82f6aa : #ffffff1a;
+                    Icon {
+                        name: is-parallax ? "sparkles" : "zap"; size: 16px;
+                        color: is-parallax ? #3b82f6 : Theme.palette.selection;
+                        x: (parent.width - self.width)/2; y: (parent.height - self.height)/2;
+                    }
+                }
+            }
+        }
+
+        // â"€â"€ Body â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+        VerticalLayout {
+            padding: 18px; spacing: 14px;
+
+            VerticalLayout {
+                spacing: 8px;
+                Text {
+                    text: root.name;
+                    font-family: Theme.font-headline;
+                    font-weight: 700; font-size: 17px;
+                    color: Theme.palette.text;
+                    overflow: elide;
+                }
+                // Tag chips: rounded "#tag" pills (clipped to one row).
+                // Always present at a fixed height so every card is the SAME
+                // total height — otherwise the per-column stacks misalign into a
+                // staircase instead of a neat grid.
+                Rectangle {
+                    height: 20px; clip: true;
+                    HorizontalLayout {
+                        spacing: 6px; alignment: start;
+                        for tag in root.tags : Rectangle {
+                            height: 20px; width: chip-txt.preferred-width + 16px;
+                            border-radius: 6px;
+                            background: Theme.is-dark ? #ffffff14 : #00000010;
+                            chip-txt := Text {
+                                text: "#" + tag;
+                                color: Theme.palette.text-muted;
+                                font-size: 9px; font-weight: 800; letter-spacing: 0.5px;
+                                horizontal-alignment: center; vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Divider
+            Rectangle { height: 1px; background: Theme.palette.border.with-alpha(0.5); }
+
+            // Footer: applied-monitor avatars + Apply dropdown
+            HorizontalLayout {
+                spacing: 8px; alignment: space-between;
+
+                // Avatars of monitors this wallpaper is applied to
+                HorizontalLayout {
+                    spacing: -6px; alignment: start;
+                    for count[i] in root.usage-counts : Rectangle {
+                        visible: count > 0;
+                        width: count > 0 ? 28px : 0px; height: 28px; border-radius: 14px;
+                        background: mon-color(i);
+                        border-width: 2px; border-color: Theme.palette.card;
+                        Text {
+                            text: i + 1;
+                            color: #ffffff; font-size: 11px; font-weight: 800;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                    }
+                }
+
+                // Apply / Manage button → popup
+                apply-btn := Rectangle {
+                    height: 34px; width: btn-row.preferred-width + 24px;
+                    border-radius: 9px;
+                    background: btn-ta.has-hover ? Theme.palette.accent.with-alpha(0.12) : transparent;
+                    animate background { duration: 150ms; }
+                    btn-row := HorizontalLayout {
+                        padding-left: 12px; padding-right: 12px; spacing: 6px; alignment: center;
+                        Text {
+                            text: is-active ? "Manage Displays" : "Apply to";
+                            color: btn-ta.has-hover ? Theme.palette.accent : Theme.palette.text;
+                            font-size: 11px; font-weight: 800; letter-spacing: 1px;
+                            vertical-alignment: center;
+                        }
+                        Icon { name: "chevron-down"; size: 14px; color: Theme.palette.text-muted; y: (parent.height - self.height)/2; }
+                    }
+                    btn-ta := TouchArea { clicked => { monitor-popup.show(); } mouse-cursor: pointer; }
+
+                    monitor-popup := PopupWindow {
+                        x: apply-btn.width - 256px; y: apply-btn.height + 6px;
+                        width: 256px;
+                        Rectangle {
+                            background: Theme.palette.card;
+                            border-radius: 14px;
+                            border-width: 1px; border-color: Theme.palette.border;
+                            drop-shadow-blur: 30px; drop-shadow-color: #00000066;
+                            VerticalLayout {
+                                padding: 8px; spacing: 2px;
+                                Text {
+                                    text: "SELECT DISPLAY";
+                                    color: Theme.palette.text-muted; font-size: 9px;
+                                    font-weight: 800; letter-spacing: 2px;
+                                    horizontal-alignment: left;
+                                    height: 24px; vertical-alignment: center;
+                                }
+                                for m[i] in root.monitors : Rectangle {
+                                    height: 48px; border-radius: 9px;
+                                    background: row-ta.has-hover ? Theme.palette.accent.with-alpha(0.12) : transparent;
+                                    row-ta := TouchArea { clicked => { root.toggle-monitor(i); } mouse-cursor: pointer; }
+                                    HorizontalLayout {
+                                        padding-left: 8px; padding-right: 8px; spacing: 10px; alignment: start;
+                                        Rectangle {
+                                            width: 28px; height: 28px; border-radius: 8px;
+                                            background: mon-color(i);
+                                            y: (parent.height - self.height)/2;
+                                            Text { text: i+1; color: #ffffff; font-size: 11px; font-weight: 800;
+                                                   horizontal-alignment: center; vertical-alignment: center; }
+                                        }
+                                        VerticalLayout {
+                                            alignment: center; horizontal-stretch: 1;
+                                            Text { text: m.name; color: Theme.palette.text; font-size: 13px; font-weight: 700; overflow: elide; }
+                                            Text { text: m.width + " x " + m.height; color: Theme.palette.text-muted; font-size: 10px; }
+                                        }
+                                        if root.usage-counts[i] > 0 : Icon {
+                                            name: "check"; size: 16px; color: Theme.palette.selection;
+                                            y: (parent.height - self.height)/2;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Parallax Studio ─────────────────────────────────────────────────────────
+// Ported from the ui-prototype ParallaxStudio. All controls are visual stubs
+// (local state only) — backend depth/parallax wiring comes later.
+
+// Slider row: label + live value badge + accent slider (local stub value).
+component KineSlider inherits VerticalLayout {
+    in property <string> label;
+    in property <bool> muted: false;
+    in property <float> minimum: 0;
+    in property <float> maximum: 1;
+    in-out property <float> value: 0;
+    spacing: 10px;
+    HorizontalLayout {
+        spacing: 8px;
+        Text {
+            text: root.label; font-size: 11px; font-weight: 700; letter-spacing: 1px;
+            color: root.muted ? Theme.palette.text-muted : Theme.palette.text;
+            horizontal-stretch: 1; vertical-alignment: center;
+        }
+        Rectangle {
+            height: 20px; width: kv.preferred-width + 16px; border-radius: 6px;
+            background: Theme.palette.accent.with-alpha(0.1);
+            kv := Text {
+                text: Math.round(root.value * 100) / 100;
+                color: Theme.palette.accent; font-size: 10px; font-weight: 800;
+                horizontal-alignment: center; vertical-alignment: center;
+            }
+        }
+    }
+    AccentSlider {
+        minimum: root.minimum; maximum: root.maximum; value: root.value;
+        changed(v) => { root.value = v; }
+    }
+}
+
+// Pill button used for the Auto-detect and Render actions.
+component PillButton inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <length> btn-height: 48px;
+    in property <bool> enabled: true;
+    callback clicked();
+    height: root.btn-height; border-radius: 14px;
+    opacity: root.enabled ? 1.0 : 0.4;
+    background: (root.enabled && pb-ta.has-hover) ? Theme.palette.accent.with-alpha(0.2) : Theme.palette.accent.with-alpha(0.1);
+    border-width: 1px; border-color: Theme.palette.accent.with-alpha(0.2);
+    animate background { duration: 150ms; }
+    HorizontalLayout {
+        alignment: center; spacing: 10px;
+        Icon { name: root.icon; size: 18px; color: Theme.palette.accent; y: (parent.height - self.height)/2; }
+        Text {
+            text: root.text; color: Theme.palette.accent; font-size: 11px; font-weight: 800;
+            letter-spacing: 2px; vertical-alignment: center;
+        }
+    }
+    pb-ta := TouchArea { clicked => { if (root.enabled) { root.clicked(); } } mouse-cursor: root.enabled ? pointer : default; }
+}
+
+// Asset-pipeline + kinematics controls (the left column). Reused in both the
+// wide (sidebar) and narrow (stacked) layouts.
+component ParallaxControls inherits VerticalLayout {
+    in-out property <string> mode: "automatic";
+    in property <string> image-name;     // selected photo (empty = none yet)
+    // Depth model selection + download state.
+    in property <[string]> model-options;
+    in property <string> model-current;
+    in property <string> model-status;       // "" hides the status row
+    in property <bool>   model-need-download; // show the Download button
+    in property <bool>   downloading;
+    in property <bool>   cinematic;            // layered (LDI) mode
+    in property <string> lama-status;
+    in property <bool>   lama-need-download;
+    in property <[string]> seg-options;        // masking-model dropdown
+    in property <string> seg-current;
+    in property <[string]> style-options;      // parallax-style dropdown
+    in property <string> style-current;
+    in property <[string]> upscaler-options;    // inpaint-detail upscaler
+    in property <string> upscaler-current;
+    callback open-image();
+    callback auto-detect();
+    callback model-changed(string);
+    callback download-model();
+    callback cinematic-toggled(bool);
+    callback download-lama();
+    callback seg-changed(string);
+    callback style-changed(string);
+    callback upscaler-changed(string);
+    spacing: 24px;
+
+    // Section 1 — Asset pipeline
+    VerticalLayout {
+        spacing: 14px;
+        SectionLabel { icon: "layers"; text: "ASSET PIPELINE"; }
+        SettingsPanel {
+            // Upload dropzone (stub)
+            Rectangle {
+                height: 160px; border-radius: 16px;
+                border-width: 2px; border-color: Theme.palette.accent.with-alpha(0.25);
+                background: dz-ta.has-hover ? Theme.palette.accent.with-alpha(0.12) : Theme.palette.accent.with-alpha(0.05);
+                animate background { duration: 150ms; }
+                VerticalLayout {
+                    alignment: center; spacing: 12px;
+                    HorizontalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 48px; height: 48px; border-radius: 24px;
+                            background: Theme.palette.accent.with-alpha(0.1);
+                            Icon { name: "upload"; size: 24px; color: Theme.palette.accent;
+                                   x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+                        }
+                    }
+                    Text { text: root.image-name == "" ? "Select an image" : root.image-name; font-size: 13px; font-weight: 700;
+                           color: Theme.palette.text; horizontal-alignment: center; overflow: elide; }
+                    Text { text: root.image-name == "" ? "PNG, JPG OR WEBP" : "CLICK TO CHANGE"; font-size: 9px; font-weight: 700; letter-spacing: 2px;
+                           color: Theme.palette.text-muted; horizontal-alignment: center; }
+                }
+                dz-ta := TouchArea { clicked => { root.open-image(); } mouse-cursor: pointer; }
+            }
+            // Settings mode
+            VerticalLayout {
+                spacing: 8px;
+                Text { text: "SETTINGS"; font-size: 10px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
+                Select {
+                    options: ["Automatic Mode", "Manual Mode"];
+                    current: root.mode == "manual" ? "Manual Mode" : "Automatic Mode";
+                    selected(v) => { root.mode = v == "Manual Mode" ? "manual" : "automatic"; }
+                }
+            }
+            // Depth estimator model + on-demand download
+            VerticalLayout {
+                spacing: 8px;
+                Text { text: "DEPTH ESTIMATOR MODEL"; font-size: 10px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
+                Select {
+                    options: root.model-options;
+                    current: root.model-current;
+                    selected(v) => { root.model-changed(v); }
+                }
+                if root.model-status != "" : HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: root.model-status; font-size: 10px; color: Theme.palette.text-muted;
+                           vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                    if root.model-need-download && !root.downloading : Rectangle {
+                        height: 28px; width: dl-t.preferred-width + 24px; border-radius: 8px;
+                        background: dl-ta.has-hover ? Theme.palette.accent.with-alpha(0.2) : Theme.palette.accent.with-alpha(0.1);
+                        border-width: 1px; border-color: Theme.palette.accent.with-alpha(0.25);
+                        dl-t := Text { text: "DOWNLOAD"; color: Theme.palette.accent; font-size: 10px; font-weight: 800;
+                               letter-spacing: 1px; x: 12px; y: (parent.height - self.height)/2; }
+                        dl-ta := TouchArea { clicked => { root.download-model(); } mouse-cursor: pointer; }
+                    }
+                }
+            }
+            // Upscaler — restores detail to the Cinematic background inpaint.
+            VerticalLayout {
+                spacing: 8px;
+                Text { text: "UPSCALER (INPAINT DETAIL)"; font-size: 10px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
+                Select { options: root.upscaler-options; current: root.upscaler-current; selected(v) => { root.upscaler-changed(v); } }
+            }
+            // Cinematic (layered) mode — inpaints the background to kill edge smear.
+            VerticalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    VerticalLayout {
+                        horizontal-stretch: 1; spacing: 2px;
+                        Text { text: "CINEMATIC (LAYERED)"; font-size: 10px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
+                        Text { text: "Inpaints background — removes edge smear"; font-size: 9px; color: Theme.palette.text-muted; }
+                    }
+                    VerticalLayout { alignment: center; Toggle { checked: root.cinematic; toggled(v) => { root.cinematic-toggled(v); } } }
+                }
+                if root.cinematic : VerticalLayout {
+                    spacing: 4px;
+                    Text { text: "MASKING MODEL"; font-size: 9px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
+                    Select {
+                        options: root.seg-options;
+                        current: root.seg-current;
+                        selected(v) => { root.seg-changed(v); }
+                    }
+                }
+                if root.cinematic : VerticalLayout {
+                    spacing: 4px;
+                    Text { text: "PARALLAX STYLE"; font-size: 9px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
+                    Select {
+                        options: root.style-options;
+                        current: root.style-current;
+                        selected(v) => { root.style-changed(v); }
+                    }
+                }
+                if root.cinematic && root.lama-status != "" : HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: root.lama-status; font-size: 10px; color: Theme.palette.text-muted;
+                           vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                    if root.lama-need-download && !root.downloading : Rectangle {
+                        height: 28px; width: lama-t.preferred-width + 24px; border-radius: 8px;
+                        background: lama-ta.has-hover ? Theme.palette.accent.with-alpha(0.2) : Theme.palette.accent.with-alpha(0.1);
+                        border-width: 1px; border-color: Theme.palette.accent.with-alpha(0.25);
+                        lama-t := Text { text: "DOWNLOAD"; color: Theme.palette.accent; font-size: 10px; font-weight: 800;
+                               letter-spacing: 1px; x: 12px; y: (parent.height - self.height)/2; }
+                        lama-ta := TouchArea { clicked => { root.download-lama(); } mouse-cursor: pointer; }
+                    }
+                }
+            }
+        }
+    }
+
+    // Section 2/3/4 — Manual kinematics, or the Automatic card.
+    if root.mode == "manual" : VerticalLayout {
+        spacing: 24px;
+        VerticalLayout {
+            spacing: 14px;
+            SectionLabel { icon: "settings-2"; text: "CORE KINEMATICS"; }
+            SettingsPanel {
+                KineSlider { label: "HEIGHT SCALE (Z-AXIS)"; value: 0; }
+                HorizontalLayout {
+                    spacing: 16px;
+                    KineSlider { horizontal-stretch: 1; label: "OFFSET X"; muted: true; value: 0; }
+                    KineSlider { horizontal-stretch: 1; label: "OFFSET Y"; muted: true; value: 0; }
+                }
+            }
+        }
+        VerticalLayout {
+            spacing: 14px;
+            SectionLabel { icon: "camera"; text: "PROJECTION & OPTICS"; }
+            SettingsPanel {
+                KineSlider { label: "ISOMETRIC BIAS"; value: 0.5; }
+                KineSlider { label: "OPTIC ZOOM"; muted: true; minimum: 0.5; maximum: 2.0; value: 1.0; }
+            }
+        }
+        VerticalLayout {
+            spacing: 14px;
+            SectionLabel { icon: "sparkles"; text: "POST-PROCESSING"; }
+            SettingsPanel {
+                Text { text: "DEPTH OF FIELD"; font-size: 11px; font-weight: 800; letter-spacing: 1px; color: Theme.palette.accent; }
+                HorizontalLayout {
+                    spacing: 16px;
+                    KineSlider { horizontal-stretch: 1; label: "BLUR RADIUS"; muted: true; value: 0; }
+                    KineSlider { horizontal-stretch: 1; label: "FOCAL DEPTH"; muted: true; value: 0; }
+                }
+            }
+        }
+    }
+    if root.mode == "automatic" : SettingsPanel {
+        VerticalLayout {
+            alignment: center; spacing: 18px;
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 64px; height: 64px; border-radius: 18px;
+                    background: Theme.palette.accent.with-alpha(0.1);
+                    Icon { name: "cpu"; size: 32px; color: Theme.palette.accent;
+                           x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+                }
+            }
+            Text { text: "AUTOMATIC SETTINGS"; font-size: 12px; font-weight: 800; letter-spacing: 2px;
+                   color: Theme.palette.text; horizontal-alignment: center; }
+            Text {
+                text: "Enable the inference engine to automatically analyze spatial depth and compute optimal kinematic coordinates.";
+                font-size: 11px; color: Theme.palette.text-muted; horizontal-alignment: center; wrap: word-wrap;
+            }
+            PillButton { text: "AUTO-DETECT"; icon: "sparkles"; clicked => { root.auto-detect(); } }
+        }
+    }
+}
+
+// Preview stage + timeline (the right column / bottom block).
+component ParallaxPreview inherits VerticalLayout {
+    in property <image> preview-image;   // live render; empty = show placeholder
+    in property <string> status;         // shown in the timeline strip
+    in property <int> progress;          // 0..100, drives the timeline bar
+    spacing: 20px;
+
+    // Previewer stage
+    Rectangle {
+        vertical-stretch: 1;
+        border-radius: 32px; clip: true;
+        background: Theme.is-dark ? #0a0d13 : #e6eaf1;
+        border-width: 1px; border-color: Theme.palette.border;
+
+        // Live preview render (fills the stage, preserving aspect).
+        if root.preview-image.width > 0 : Image {
+            source: root.preview-image;
+            image-fit: contain;
+            width: 100%; height: 100%;
+        }
+
+        if root.preview-image.width == 0 : VerticalLayout {
+            alignment: center; spacing: 22px; padding: 24px;
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 96px; height: 96px; border-radius: 32px;
+                    background: Theme.palette.accent.with-alpha(0.1);
+                    Icon { name: "video"; size: 48px; color: Theme.palette.accent;
+                           x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+                }
+            }
+            Text { text: "Kinematic Previewer"; font-family: Theme.font-headline; font-size: 24px; font-weight: 700;
+                   color: Theme.palette.text; horizontal-alignment: center; }
+            Text { text: "Select and upload an image, adjust settings and hit Render!";
+                   font-size: 13px; color: Theme.palette.text-muted; horizontal-alignment: center; wrap: word-wrap; }
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 28px; width: rdy-t.preferred-width + 28px; border-radius: 14px;
+                    background: Theme.palette.accent.with-alpha(0.08);
+                    border-width: 1px; border-color: Theme.palette.accent.with-alpha(0.2);
+                    rdy-t := Text { text: "READY FOR INPUT"; color: Theme.palette.accent; font-size: 9px; font-weight: 800;
+                           letter-spacing: 2px; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+        }
+
+        // Top-left engine badge
+        Rectangle {
+            x: 24px; y: 24px; height: 24px; width: pe-t.preferred-width + 24px; border-radius: 12px;
+            background: Theme.is-dark ? #ffffff12 : #00000010;
+            border-width: 1px; border-color: Theme.is-dark ? #ffffff1a : #00000014;
+            pe-t := Text { text: "PARALLAX ENGINE"; color: Theme.palette.text-muted; font-size: 9px; font-weight: 800;
+                   letter-spacing: 3px; horizontal-alignment: center; vertical-alignment: center; }
+        }
+        // Top-right action buttons
+        HorizontalLayout {
+            x: parent.width - self.preferred-width - 24px; y: 24px; spacing: 10px;
+            Rectangle {
+                width: 40px; height: 40px; border-radius: 12px;
+                background: info-ta.has-hover ? Theme.palette.card-hover : Theme.palette.card;
+                border-width: 1px; border-color: Theme.palette.border;
+                Icon { name: "info"; size: 18px; color: Theme.palette.text-muted; x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+                info-ta := TouchArea { mouse-cursor: pointer; }
+            }
+            Rectangle {
+                width: 40px; height: 40px; border-radius: 12px;
+                background: max-ta.has-hover ? Theme.palette.card-hover : Theme.palette.card;
+                border-width: 1px; border-color: Theme.palette.border;
+                Icon { name: "maximize"; size: 18px; color: Theme.palette.text-muted; x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+                max-ta := TouchArea { mouse-cursor: pointer; }
+            }
+        }
+    }
+
+    // Status / progress strip (was the "sequence timeline" placeholder).
+    Rectangle {
+        height: 96px; border-radius: 24px;
+        background: Theme.palette.card; border-width: 1px; border-color: Theme.palette.border;
+        VerticalLayout {
+            padding: 24px; spacing: 16px;
+            HorizontalLayout {
+                property <bool> active: root.status != "";
+                Text { text: parent.active ? root.status : "SEQUENCE TIMELINE";
+                       font-size: parent.active ? 11px : 9px; font-weight: 800; letter-spacing: parent.active ? 0px : 2px;
+                       color: parent.active ? Theme.palette.text : Theme.palette.text-muted; opacity: parent.active ? 1.0 : 0.6;
+                       horizontal-stretch: 1; vertical-alignment: center; overflow: elide; }
+                Text { text: parent.active ? (root.progress + "%") : "00:00:00 / 00:00:00";
+                       font-size: parent.active ? 11px : 9px; font-weight: 800; letter-spacing: parent.active ? 0px : 2px;
+                       color: parent.active ? Theme.palette.accent : Theme.palette.text-muted; opacity: parent.active ? 1.0 : 0.6;
+                       vertical-alignment: center; }
+            }
+            Rectangle {
+                height: 6px; border-radius: 3px;
+                background: Theme.is-dark ? #ffffff0d : #00000010;
+                Rectangle {
+                    x: 0; height: 100%; border-radius: 3px; background: Theme.palette.accent;
+                    width: parent.width * (root.progress / 100.0);
+                    animate width { duration: 200ms; easing: ease; }
+                }
+            }
+        }
+    }
+}
+
+component ParallaxStudio inherits Rectangle {
+    property <string> mode: "automatic";
+    // Side-by-side on wide windows; stacked + scrolling when narrow (like the
+    // Compositor/Settings tabs) so nothing clips off the right on small windows.
+    property <bool> wide: self.width >= 1000px;
+    in property <string> image-name;   // selected photo file name (empty = none)
+    in property <bool> busy;           // depth generation / export in progress
+    in property <string> status;       // shown in the previewer's timeline strip
+    in property <int> progress;        // 0..100 for the timeline bar
+    in property <[string]> model-options;
+    in property <string> model-current;
+    in property <string> model-status;
+    in property <bool> model-need-download;
+    in property <bool> downloading;
+    in property <bool> cinematic;
+    in property <string> lama-status;
+    in property <bool> lama-need-download;
+    in property <[string]> seg-options;
+    in property <string> seg-current;
+    in property <[string]> style-options;
+    in property <string> style-current;
+    in property <[string]> upscaler-options;
+    in property <string> upscaler-current;
+    in property <image> preview-image;
+    in property <bool> has-preview;
+    callback open-image();
+    callback auto-detect();
+    callback render-requested();
+    callback save-requested();
+    callback model-changed(string);
+    callback download-model();
+    callback cinematic-toggled(bool);
+    callback download-lama();
+    callback seg-changed(string);
+    callback style-changed(string);
+    callback upscaler-changed(string);
+
+    // Render button label + a status line, shared by both layouts.
+    property <string> render-label: root.busy ? "WORKING…" : (root.has-preview ? "RE-RENDER" : "RENDER");
+
+    // ── Wide: 400px control sidebar + stretching preview ──
+    // (A layout auto-fills its Rectangle parent — no explicit 100% needed; an
+    //  explicit 100% against the not-yet-sized parent can collapse to preferred.)
+    if root.wide : HorizontalLayout {
+        spacing: 24px;
+        Rectangle {
+            width: 400px;
+            VerticalLayout {
+                spacing: 16px;
+                ScrollView {
+                    vertical-stretch: 1;
+                    ParallaxControls {
+                        width: 388px;
+                        mode <=> root.mode;
+                        image-name: root.image-name;
+                        model-options: root.model-options;
+                        model-current: root.model-current;
+                        model-status: root.model-status;
+                        model-need-download: root.model-need-download;
+                        downloading: root.downloading;
+                        cinematic: root.cinematic;
+                        lama-status: root.lama-status;
+                        lama-need-download: root.lama-need-download;
+                        seg-options: root.seg-options;
+                        seg-current: root.seg-current;
+                        style-options: root.style-options;
+                        style-current: root.style-current;
+                        upscaler-options: root.upscaler-options;
+                        upscaler-current: root.upscaler-current;
+                        open-image => { root.open-image(); }
+                        auto-detect => { root.auto-detect(); }
+                        model-changed(v) => { root.model-changed(v); }
+                        download-model => { root.download-model(); }
+                        cinematic-toggled(v) => { root.cinematic-toggled(v); }
+                        download-lama => { root.download-lama(); }
+                        seg-changed(v) => { root.seg-changed(v); }
+                        style-changed(v) => { root.style-changed(v); }
+                        upscaler-changed(v) => { root.upscaler-changed(v); }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    PillButton { horizontal-stretch: 1; btn-height: 56px; text: root.render-label; icon: "video"; clicked => { if (!root.busy) { root.render-requested(); } } }
+                    PillButton { horizontal-stretch: 1; btn-height: 56px; text: "SAVE TO LIBRARY"; icon: "save"; enabled: root.has-preview && !root.busy; clicked => { root.save-requested(); } }
+                }
+            }
+        }
+        ParallaxPreview { horizontal-stretch: 1; preview-image: root.preview-image; status: root.status; progress: root.progress; }
+    }
+
+    // ── Narrow: single scrolling column (controls → render → preview) ──
+    if !root.wide : ScrollView {
+        VerticalLayout {
+            width: root.width - 26px;
+            padding: 4px; spacing: 24px;
+            ParallaxControls {
+                mode <=> root.mode;
+                image-name: root.image-name;
+                model-options: root.model-options;
+                model-current: root.model-current;
+                model-status: root.model-status;
+                model-need-download: root.model-need-download;
+                downloading: root.downloading;
+                cinematic: root.cinematic;
+                lama-status: root.lama-status;
+                lama-need-download: root.lama-need-download;
+                seg-options: root.seg-options;
+                seg-current: root.seg-current;
+                style-options: root.style-options;
+                style-current: root.style-current;
+                upscaler-options: root.upscaler-options;
+                upscaler-current: root.upscaler-current;
+                open-image => { root.open-image(); }
+                auto-detect => { root.auto-detect(); }
+                model-changed(v) => { root.model-changed(v); }
+                download-model => { root.download-model(); }
+                cinematic-toggled(v) => { root.cinematic-toggled(v); }
+                download-lama => { root.download-lama(); }
+                seg-changed(v) => { root.seg-changed(v); }
+                style-changed(v) => { root.style-changed(v); }
+                upscaler-changed(v) => { root.upscaler-changed(v); }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                PillButton { horizontal-stretch: 1; btn-height: 56px; text: root.render-label; icon: "video"; clicked => { if (!root.busy) { root.render-requested(); } } }
+                PillButton { horizontal-stretch: 1; btn-height: 56px; text: "SAVE TO LIBRARY"; icon: "save"; enabled: root.has-preview && !root.busy; clicked => { root.save-requested(); } }
+            }
+            ParallaxPreview { height: 460px; preview-image: root.preview-image; status: root.status; progress: root.progress; }
+        }
+    }
+}
+
+// â"€â"€ Wallpaper render window (borderless, no decorations) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+export component WallpaperWindow inherits Window {
+    background: black;
+    no-frame: true;
+}
+
+// â"€â"€ Main app window â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+// Bottom-right transient notification (matches the ui-prototype toaster). The
+// stack is driven by the `toasts` model; auto-dismiss timing is owned by Rust.
+component ToastCard inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in property <bool> destructive;
+    callback dismissed();
+
+    width: 360px;
+    height: layout.preferred-height;
+    border-radius: 10px;
+    background: root.destructive ? Theme.palette.danger.with-alpha(0.12) : Theme.palette.card;
+    border-width: 1px;
+    border-color: root.destructive ? Theme.palette.danger.with-alpha(0.55) : Theme.palette.border;
+    drop-shadow-color: #00000055;
+    drop-shadow-blur: 18px;
+    drop-shadow-offset-y: 6px;
+    // Subtle entrance fade (the y is owned by the stack layout, so we can't
+    // animate position here — opacity alone reads cleanly).
+    opacity: 0;
+    init => { self.opacity = 1; }
+    animate opacity { duration: 180ms; easing: ease-out; }
+
+    layout := HorizontalLayout {
+        padding: 16px;
+        spacing: 12px;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 3px;
+            alignment: center;
+            Text {
+                text: root.title;
+                font-family: Theme.font-headline;
+                font-size: 13px;
+                font-weight: 700;
+                color: root.destructive ? Theme.palette.danger : Theme.palette.text;
+                wrap: word-wrap;
+            }
+            if root.description != "" : Text {
+                text: root.description;
+                font-size: 11px;
+                color: Theme.palette.text-muted;
+                wrap: word-wrap;
+            }
+        }
+        VerticalLayout {
+            alignment: start;
+            Rectangle {
+                width: 20px; height: 20px; border-radius: 4px;
+                background: close-ta.has-hover ? Theme.palette.card-hover : transparent;
+                Icon { name: "x"; size: 12px;
+                       color: close-ta.has-hover ? Theme.palette.text : Theme.palette.text-muted;
+                       x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+                close-ta := TouchArea { clicked => { root.dismissed(); } }
+            }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Strata - Live Wallpaper Engine";
+    min-width: 960px; min-height: 680px;
+    background: Theme.palette.background;
+    default-font-family: Theme.font-body;
+    icon: @image-url("../../../assets/app-icon_dark.png");
+
+    // Keep the std-widgets palette (used by ScrollView scrollbars) in sync with
+    // our custom theme, so scrollbars are visible/correct in both light & dark.
+    property <bool> is-dark-tracker: Theme.is-dark;
+    init => { Palette.color-scheme = Theme.is-dark ? ColorScheme.dark : ColorScheme.light; }
+    changed is-dark-tracker => { Palette.color-scheme = self.is-dark-tracker ? ColorScheme.dark : ColorScheme.light; }
+
+    // â"€â"€ Data bindings â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    in property <float> fps: 0;
+    in property <float> frame-time: 0;
+    in property <float> vram-usage: 0;
+    // True when at least one shader layer is being rendered. When false the
+    // telemetry cards show an "Inactive" state instead of an alarming 0 FPS / LOW.
+    in property <bool> engine-active: false;
+    in property <[LogEntry]> logs: [];
+
+    in property <[WallpaperItem]> wallpapers: [];
+    in property <[MonitorItem]>   monitors: [];
+    in property <[LayerItem]>     layers: [];
+    in property <[ToastData]>     toasts: [];
+    // Default to the first display so the Compositor always opens with a monitor
+    // selected (and editable) instead of requiring the user to click one first.
+    in property <int> selected-monitor-index: 0;
+    // Compositor spatial edit-mode draft (monitor pixels).
+    in-out property <int>   editing-layer: -1;
+    in-out property <float> edit-x;
+    in-out property <float> edit-y;
+    in-out property <float> edit-w;
+    in-out property <float> edit-h;
+
+    in property <int> canvas-min-x: 0;
+    in property <int> canvas-min-y: 0;
+    in property <int> canvas-max-x: 1920;
+    in property <int> canvas-max-y: 1080;
+
+    in-out property <bool> span-monitors:  false;
+    in-out property <bool> debug-overlay:  false;
+    in-out property <bool> autostart:      false;
+    in-out property <int>  fps-cap:        60;
+    in-out property <string> vsync-mode:     "Fifo (VSync On)";
+    in-out property <string> shader-quality: "High (Maximum Fidelity)";
+    in-out property <float>  audio-sensitivity: 1.0;
+    in-out property <bool>   mouse-interactive: false;
+    in-out property <float>  mouse-sensitivity: 1.0;
+    in-out property <string> search-query: "";
+    // Library thumbnail refresh: `refreshing` is true while the background thumb
+    // generator runs (accents the refresh icon; the toast signals progress).
+    in-out property <bool>   refreshing: false;
+
+    // Private state
+    in-out property <string> active-tab: "library";
+
+    // â"€â"€ Callbacks â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    callback theme-changed(string);
+    callback quit-requested();
+    callback import-requested();
+    callback refresh-library();
+    callback wallpaper-delete-requested(int);
+    // Parallax Studio
+    callback parallax-pick-image();
+    callback parallax-create();
+    callback parallax-save();
+    callback parallax-model-changed(string);
+    callback parallax-download-model();
+    callback parallax-cinematic-toggled(bool);
+    callback parallax-download-lama();
+    callback parallax-seg-changed(string);
+    callback parallax-style-changed(string);
+    callback parallax-upscaler-changed(string);
+    in-out property <bool>   parallax-cinematic: false;
+    in-out property <string> parallax-lama-status: "";
+    in-out property <bool>   parallax-lama-need-download: false;
+    in-out property <[string]> parallax-seg-options: [];
+    in-out property <string> parallax-seg-current: "";
+    in-out property <[string]> parallax-style-options: [];
+    in-out property <string> parallax-style-current: "";
+    in-out property <[string]> parallax-upscaler-options: [];
+    in-out property <string> parallax-upscaler-current: "";
+    in-out property <string> parallax-image-name: "";
+    in-out property <bool>   parallax-busy: false;
+    in-out property <string> parallax-status: "";
+    in-out property <int>    parallax-progress: 0;
+    in-out property <image>  parallax-preview-image;
+    in-out property <bool>   parallax-has-preview: false;
+    in-out property <[string]> parallax-model-options: ["Fast (no model)"];
+    in-out property <string> parallax-model-current: "Fast (no model)";
+    in-out property <string> parallax-model-status: "";
+    in-out property <bool>   parallax-model-need-download: false;
+    in-out property <bool>   parallax-downloading: false;
+    callback search-edited(string);
+    callback monitor-selected(int);
+    callback layer-opacity-changed(int, float);
+    callback layer-remove-requested(int);
+    callback apply-to-monitor(int, string);
+    callback layer-positioning-changed(int, string);
+    callback layer-scale-changed(int, float);
+    callback layer-move-up(int);
+    callback layer-move-down(int);
+    callback layer-transform-changed(int, float, float, float, float);
+    callback layer-transform-live(int, float, float, float, float); // live drag preview (no save)
+    callback layer-edit-cancelled(); // discard → revert the live preview
+    callback layer-visibility-toggled(int, bool);
+    callback layer-blend-changed(int, string);
+    callback monitor-rename(int, string);
+    callback monitor-color-changed(int, string);
+    callback span-toggled(bool);
+    callback debug-toggled(bool);
+    callback autostart-toggled(bool);
+    callback vsync-changed(string);
+    callback fps-cap-changed(int);
+    callback shader-quality-changed(string);
+    callback copy-logs();
+    callback open-debugger();
+    callback refresh-monitors();
+    callback toast-dismissed(int);
+    callback audio-sensitivity-changed(float);
+    callback mouse-interactive-toggled(bool);
+    callback mouse-sensitivity-changed(float);
+
+    // â"€â"€ Root layout â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    HorizontalLayout {
+        padding: 0; spacing: 0;
+
+        // â"€â"€ Sidebar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+        Rectangle {
+            width: 256px;
+            background: Theme.palette.sidebar;
+            // Right hairline border
+            Rectangle { x: parent.width - 1px; width: 1px; height: 100%; background: Theme.palette.border; }
+
+            VerticalLayout {
+                padding: 24px; spacing: 8px;
+
+                // â"€â"€ Logo + wordmark â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+                HorizontalLayout {
+                    padding-bottom: 32px; spacing: 12px; alignment: start;
+                    AppLogo { width: 40px; height: 40px; is-dark: Theme.is-dark; }
+                    VerticalLayout {
+                        alignment: center; spacing: 3px;
+                        Text {
+                            text: L10n.app-name;
+                            font-family: Theme.font-headline;
+                            font-size: 20px; font-weight: 700;
+                            color: Theme.palette.text;
+                        }
+                        Text {
+                            text: L10n.app-tagline;
+                            font-size: 9px; font-weight: 700; letter-spacing: 2px;
+                            color: Theme.palette.accent;
+                        }
+                    }
+                }
+
+                SidebarButton {
+                    icon: "library"; text: L10n.tab-library;
+                    active: root.active-tab == "library";
+                    clicked => { root.active-tab = "library"; }
+                }
+                SidebarButton {
+                    icon: "layers"; text: L10n.tab-compositor;
+                    active: root.active-tab == "compositor";
+                    clicked => { root.active-tab = "compositor"; }
+                }
+                SidebarButton {
+                    icon: "sparkles"; text: L10n.tab-parallax;
+                    active: root.active-tab == "parallax";
+                    clicked => { root.active-tab = "parallax"; }
+                }
+                SidebarButton {
+                    icon: "activity"; text: L10n.tab-diagnostics;
+                    active: root.active-tab == "diagnostics";
+                    clicked => { root.active-tab = "diagnostics"; }
+                }
+                SidebarButton {
+                    icon: "settings-2"; text: L10n.tab-settings;
+                    active: root.active-tab == "settings";
+                    clicked => { root.active-tab = "settings"; }
+                }
+
+                Rectangle { vertical-stretch: 1; }
+
+                Rectangle { height: 1px; background: Theme.palette.border; }
+                Rectangle { height: 8px; }
+
+                SidebarButton {
+                    icon: "log-out"; text: L10n.btn-quit; danger: true;
+                    clicked => { root.quit-requested(); }
+                }
+            }
+        }
+
+        // â"€â"€ Main content area â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+        VerticalLayout {
+            padding: 32px; spacing: 24px;
+
+            // â"€â"€ Header: editorial title + subtitle â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+            VerticalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    spacing: 14px; alignment: start;
+                    Text {
+                        text: root.active-tab == "library"     ? L10n.title-library
+                            : root.active-tab == "compositor"  ? L10n.title-compositor
+                            : root.active-tab == "parallax"    ? L10n.title-parallax
+                            : root.active-tab == "diagnostics" ? L10n.title-diagnostics
+                            : L10n.title-settings;
+                        font-family: Theme.font-headline;
+                        font-size: 34px; font-weight: 700;
+                        color: Theme.palette.text;
+                        vertical-alignment: center;
+                    }
+                    if root.active-tab == "parallax" : Rectangle {
+                        y: 8px;
+                        height: 22px; width: up-row.preferred-width + 20px;
+                        border-radius: 6px;
+                        background: Theme.palette.card-hover;
+                        up-row := HorizontalLayout {
+                            padding-left: 10px; padding-right: 10px; alignment: center;
+                            Text {
+                                text: "UPCOMING";
+                                color: Theme.palette.text-muted;
+                                font-size: 9px; font-weight: 800; letter-spacing: 2px;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+                Text {
+                    text: root.active-tab == "library"     ? L10n.sub-library
+                        : root.active-tab == "compositor"  ? L10n.sub-compositor
+                        : root.active-tab == "parallax"    ? L10n.sub-parallax
+                        : root.active-tab == "diagnostics" ? L10n.sub-diagnostics
+                        : L10n.sub-settings;
+                    color: Theme.palette.text-muted; font-size: 14px;
+                }
+            }
+
+            // == Library tab ===================================================
+            if root.active-tab == "library" : VerticalLayout {
+                vertical-stretch: 1; spacing: 24px;
+
+                // â"€â"€ Toolbar: search + refresh + import â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+                HorizontalLayout {
+                    spacing: 12px;
+
+                    // Search field (icon + inline editor with placeholder)
+                    Rectangle {
+                        horizontal-stretch: 1; height: 48px;
+                        border-radius: 12px;
+                        clip: true;
+                        background: Theme.palette.card;
+                        border-width: 1px;
+                        border-color: search-input.has-focus ? Theme.palette.accent : Theme.palette.border;
+                        animate border-color { duration: 150ms; }
+                        HorizontalLayout {
+                            padding-left: 16px; padding-right: 14px; spacing: 10px;
+                            VerticalLayout {
+                                alignment: center;
+                                Icon { name: "search"; size: 16px; color: Theme.palette.text-muted; }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                clip: true;
+                                search-input := TextInput {
+                                    width: 100%; height: 100%;
+                                    vertical-alignment: center;
+                                    single-line: true;
+                                    color: Theme.palette.text;
+                                    font-size: 14px;
+                                    text: root.search-query;
+                                    edited => { root.search-query = self.text; root.search-edited(self.text); }
+                                }
+                                if root.search-query == "" : Text {
+                                    width: 100%; height: 100%;
+                                    vertical-alignment: center;
+                                    text: L10n.search-placeholder;
+                                    color: Theme.palette.text-muted;
+                                    font-size: 14px;
+                                }
+                            }
+                        }
+                    }
+
+                    // Refresh library
+                    Rectangle {
+                        width: 48px; height: 48px; border-radius: 12px;
+                        background: rf-ta.has-hover ? Theme.palette.card-hover : Theme.palette.card;
+                        border-width: 1px;
+                        border-color: rf-ta.has-hover ? Theme.palette.accent : Theme.palette.border;
+                        animate border-color, background { duration: 150ms; }
+                        // Accented while a refresh is generating thumbnails; the
+                        // toast notification already signals progress, so no spin.
+                        Icon {
+                            name: "refresh-cw";
+                            size: 18px;
+                            color: root.refreshing ? Theme.palette.accent : Theme.palette.text-muted;
+                            x: (parent.width - self.width)/2; y: (parent.height - self.height)/2;
+                        }
+                        rf-ta := TouchArea { clicked => { root.refresh-library(); } mouse-cursor: pointer; }
+                    }
+
+                    // Import (primary CTA)
+                    Rectangle {
+                        height: 48px; width: imp-row.preferred-width + 40px; border-radius: 12px;
+                        background: imp-ta.has-hover ? Theme.palette.accent.brighter(0.12) : Theme.palette.accent;
+                        drop-shadow-blur: 16px; drop-shadow-color: Theme.palette.accent.with-alpha(0.3); drop-shadow-offset-y: 4px;
+                        animate background { duration: 150ms; }
+                        imp-row := HorizontalLayout {
+                            padding-left: 20px; padding-right: 20px; spacing: 8px; alignment: center;
+                            Icon { name: "plus"; size: 16px; color: #ffffff; y: (parent.height - self.height)/2; }
+                            Text { text: L10n.btn-import; color: #ffffff; font-size: 12px; font-weight: 800;
+                                   letter-spacing: 1px; vertical-alignment: center; }
+                        }
+                        imp-ta := TouchArea { clicked => { root.import-requested(); } mouse-cursor: pointer; }
+                    }
+                }
+
+                // â"€â"€ Responsive card grid â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+                // Column count follows the prototype's Tailwind breakpoints
+                // (1 / sm:2 / lg:3 / xl:4) on the window width.  Each column is a
+                // stretching lane; card i lives in column (i mod cols), row (i div
+                // cols) â€" i.e. row-major fill identical to a CSS grid.  Only the
+                // active lanes exist (no phantom-spacing from empty wrappers).
+                grid-area := Rectangle {
+                    vertical-stretch: 1;
+                    property <int> cols: root.width < 640px ? 1
+                                       : root.width < 1024px ? 2
+                                       : root.width < 1280px ? 3 : 4;
+                    // Exactly `cols` lane indices so the row has no phantom empty
+                    // columns (Slint has no range literal, so enumerate cases).
+                    property <[float]> lanes: root.width < 640px ? [0]
+                                            : root.width < 1024px ? [0, 1]
+                                            : root.width < 1280px ? [0, 1, 2] : [0, 1, 2, 3];
+                    // Explicit, identical column width so every card is the same
+                    // size regardless of content. Reserve a right gutter (34px =
+                    // 8px padding + scrollbar lane + a few px breathing room) so the
+                    // hover-expanded vertical scrollbar never touches the card
+                    // borders; then split the rest into equal columns minus gaps.
+                    property <length> col-width: (self.width - 34px - (cols - 1) * 32px) / cols;
+                    ScrollView {
+                        VerticalLayout {
+                            // Constrain content to the viewport width (minus the
+                            // scrollbar gutter) so columns share exactly the
+                            // available space — never overflow into a horizontal
+                            // scrollbar / clipped cards at small window sizes.
+                            width: grid-area.width - 26px;
+                            padding: 4px;
+                            if root.wallpapers.length > 0 : HorizontalLayout {
+                                spacing: 32px; alignment: start;
+                                for lane in grid-area.lanes : VerticalLayout {
+                                    width: grid-area.col-width;
+                                    spacing: 0; alignment: start;
+                                    // One wrapper per wallpaper (always present); the
+                                    // 32px gap lives in per-card bottom padding so
+                                    // non-matching iterations contribute zero height.
+                                    for wallpaper[i] in root.wallpapers : VerticalLayout {
+                                        padding-bottom: (wallpaper.visible && Math.mod(i, grid-area.cols) == lane) ? 32px : 0px;
+                                        if wallpaper.visible && (Math.mod(i, grid-area.cols) == lane) : WallpaperCard {
+                                            name:          wallpaper.name;
+                                            author:        wallpaper.author;
+                                            tags:          wallpaper.tags;
+                                            has-thumbnail: wallpaper.has-thumbnail;
+                                            thumbnail:     wallpaper.thumbnail;
+                                            usage-counts:  wallpaper.usage-counts;
+                                            monitors:      root.monitors;
+                                            is-active:     wallpaper.is-active;
+                                            is-parallax:   wallpaper.is-parallax;
+                                            toggle-monitor(idx) => { root.apply-to-monitor(idx, wallpaper.name); }
+                                            delete-requested => { root.wallpaper-delete-requested(i); }
+                                        }
+                                    }
+                                }
+                            }
+                            if root.wallpapers.length == 0 : VerticalLayout {
+                                alignment: center; spacing: 14px;
+                                HorizontalLayout {
+                                    alignment: center;
+                                    Icon { name: "library"; size: 40px; color: Theme.palette.text-muted.with-alpha(0.4); }
+                                }
+                                Text {
+                                    text: L10n.no-wallpapers;
+                                    color: Theme.palette.text-muted;
+                                    horizontal-alignment: center; font-size: 14px;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // == Parallax Studio ===============================================
+            if root.active-tab == "parallax" : ParallaxStudio {
+                vertical-stretch: 1;
+                image-name: root.parallax-image-name;
+                busy: root.parallax-busy;
+                status: root.parallax-status;
+                model-options: root.parallax-model-options;
+                model-current: root.parallax-model-current;
+                model-status: root.parallax-model-status;
+                model-need-download: root.parallax-model-need-download;
+                downloading: root.parallax-downloading;
+                cinematic: root.parallax-cinematic;
+                lama-status: root.parallax-lama-status;
+                lama-need-download: root.parallax-lama-need-download;
+                seg-options: root.parallax-seg-options;
+                seg-current: root.parallax-seg-current;
+                style-options: root.parallax-style-options;
+                style-current: root.parallax-style-current;
+                upscaler-options: root.parallax-upscaler-options;
+                upscaler-current: root.parallax-upscaler-current;
+                preview-image: root.parallax-preview-image;
+                has-preview: root.parallax-has-preview;
+                progress: root.parallax-progress;
+                open-image => { root.parallax-pick-image(); }
+                render-requested => { root.parallax-create(); }
+                auto-detect => { root.parallax-create(); }
+                save-requested => { root.parallax-save(); }
+                model-changed(v) => { root.parallax-model-changed(v); }
+                download-model => { root.parallax-download-model(); }
+                cinematic-toggled(v) => { root.parallax-cinematic-toggled(v); }
+                download-lama => { root.parallax-download-lama(); }
+                seg-changed(v) => { root.parallax-seg-changed(v); }
+                style-changed(v) => { root.parallax-style-changed(v); }
+                upscaler-changed(v) => { root.parallax-upscaler-changed(v); }
+            }
+
+            // â•گâ•گ Compositor tab â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
+            // == Compositor tab ===============================================
+            // Spatial canvas + layer stack; side-by-side on wide windows, stacked
+            // when narrow (canvas on top, layers below).
+            if root.active-tab == "compositor" : comp-area := Rectangle {
+                vertical-stretch: 1;
+                property <bool> wide: root.width >= 1100px;
+
+                if comp-area.wide : HorizontalLayout {
+                    spacing: 24px;
+                    CompositorCanvas {
+                        horizontal-stretch: 1;
+                        monitors: root.monitors; selected-index: root.selected-monitor-index; span: root.span-monitors;
+                        canvas-min-x: root.canvas-min-x; canvas-min-y: root.canvas-min-y;
+                        canvas-max-x: root.canvas-max-x; canvas-max-y: root.canvas-max-y;
+                        editing-layer <=> root.editing-layer;
+                        edit-x <=> root.edit-x; edit-y <=> root.edit-y; edit-w <=> root.edit-w; edit-h <=> root.edit-h;
+                        monitor-selected(i) => { root.monitor-selected(i); }
+                        refresh => { root.refresh-monitors(); }
+                        span-toggled(v) => { root.span-monitors = v; root.span-toggled(v); }
+                        rename(i, n) => { root.monitor-rename(i, n); }
+                        color-changed(i, c) => { root.monitor-color-changed(i, c); }
+                        edit-save => { root.layer-transform-changed(root.editing-layer, root.edit-x, root.edit-y, root.edit-w, root.edit-h); root.editing-layer = -1; }
+                        edit-cancel => { root.editing-layer = -1; root.layer-edit-cancelled(); }
+                        edit-live => { root.layer-transform-live(root.editing-layer, root.edit-x, root.edit-y, root.edit-w, root.edit-h); }
+                    }
+                    LayerStack {
+                        width: 360px;
+                        layers: root.layers;
+                        monitor-name: root.selected-monitor-index >= 0 ? root.monitors[root.selected-monitor-index].name : "No display selected";
+                        move-up(i) => { root.layer-move-up(i); }
+                        move-down(i) => { root.layer-move-down(i); }
+                        remove(i) => { root.layer-remove-requested(i); }
+                        opacity-changed(i, o) => { root.layer-opacity-changed(i, o); }
+                        blend-changed(i, b) => { root.layer-blend-changed(i, b); }
+                        visibility-toggled(i, v) => { root.layer-visibility-toggled(i, v); }
+                        edit-requested(i) => {
+                            root.editing-layer = i;
+                            root.edit-x = root.layers[i].positioning == "Custom" ? root.layers[i].x : 0;
+                            root.edit-y = root.layers[i].positioning == "Custom" ? root.layers[i].y : 0;
+                            root.edit-w = root.layers[i].positioning == "Custom" ? root.layers[i].width  : root.monitors[root.selected-monitor-index].width;
+                            root.edit-h = root.layers[i].positioning == "Custom" ? root.layers[i].height : root.monitors[root.selected-monitor-index].height;
+                        }
+                    }
+                }
+
+                // Narrow: canvas on top (fixed height), layer panel scrolling below.
+                // The canvas must stay OUTSIDE the ScrollView — a Flickable captures
+                // pointer drags, which would steal the edit-overlay's move/resize
+                // gestures (the bug that made editing only work in the wide layout).
+                if !comp-area.wide : VerticalLayout {
+                    padding: 4px; spacing: 24px;
+                    CompositorCanvas {
+                        height: 300px;
+                        monitors: root.monitors; selected-index: root.selected-monitor-index; span: root.span-monitors;
+                        canvas-min-x: root.canvas-min-x; canvas-min-y: root.canvas-min-y;
+                        canvas-max-x: root.canvas-max-x; canvas-max-y: root.canvas-max-y;
+                        editing-layer <=> root.editing-layer;
+                        edit-x <=> root.edit-x; edit-y <=> root.edit-y; edit-w <=> root.edit-w; edit-h <=> root.edit-h;
+                        monitor-selected(i) => { root.monitor-selected(i); }
+                        refresh => { root.refresh-monitors(); }
+                        span-toggled(v) => { root.span-monitors = v; root.span-toggled(v); }
+                        rename(i, n) => { root.monitor-rename(i, n); }
+                        color-changed(i, c) => { root.monitor-color-changed(i, c); }
+                        edit-save => { root.layer-transform-changed(root.editing-layer, root.edit-x, root.edit-y, root.edit-w, root.edit-h); root.editing-layer = -1; }
+                        edit-cancel => { root.editing-layer = -1; root.layer-edit-cancelled(); }
+                        edit-live => { root.layer-transform-live(root.editing-layer, root.edit-x, root.edit-y, root.edit-w, root.edit-h); }
+                    }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        LayerStack {
+                            // No inner scroll — this ScrollView handles it, so there's
+                            // a single scrollbar and the layers stack below each other.
+                            scrollable: false;
+                            layers: root.layers;
+                            monitor-name: root.selected-monitor-index >= 0 ? root.monitors[root.selected-monitor-index].name : "No display selected";
+                            move-up(i) => { root.layer-move-up(i); }
+                            move-down(i) => { root.layer-move-down(i); }
+                            remove(i) => { root.layer-remove-requested(i); }
+                            opacity-changed(i, o) => { root.layer-opacity-changed(i, o); }
+                            blend-changed(i, b) => { root.layer-blend-changed(i, b); }
+                            visibility-toggled(i, v) => { root.layer-visibility-toggled(i, v); }
+                            edit-requested(i) => {
+                                root.editing-layer = i;
+                                root.edit-x = root.layers[i].positioning == "Custom" ? root.layers[i].x : 0;
+                                root.edit-y = root.layers[i].positioning == "Custom" ? root.layers[i].y : 0;
+                                root.edit-w = root.layers[i].positioning == "Custom" ? root.layers[i].width  : root.monitors[root.selected-monitor-index].width;
+                                root.edit-h = root.layers[i].positioning == "Custom" ? root.layers[i].height : root.monitors[root.selected-monitor-index].height;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // â•گâ•گ Settings tab â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
+            // â•گâ•گ Settings tab â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
+            // Two-column on wide windows, single stacked column when narrow so the
+            // panels always fill the width and never clip out of the window.
+            if root.active-tab == "settings" : settings-area := Rectangle {
+                vertical-stretch: 1;
+                property <bool> two-col: root.width >= 1080px;
+                ScrollView {
+                    VerticalLayout {
+                        width: settings-area.width - 26px;
+                        padding: 4px;
+
+                        // â”€â”€ Wide: two columns (7 / 5) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                        if settings-area.two-col : HorizontalLayout {
+                            spacing: 32px; alignment: stretch;
+                            VerticalLayout {
+                                horizontal-stretch: 7; spacing: 24px; alignment: start;
+                                AppearanceSettings { theme-changed(m) => { root.theme-changed(m); } }
+                                IntegrationsSettings { }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 5; spacing: 24px; alignment: start;
+                                SystemControlSettings {
+                                    autostart: root.autostart; fps-cap: root.fps-cap;
+                                    shader-quality: root.shader-quality; vsync-mode: root.vsync-mode;
+                                    autostart-toggled(v) => { root.autostart = v; root.autostart-toggled(v); }
+                                    fps-cap-changed(v) => { root.fps-cap = v; root.fps-cap-changed(v); }
+                                    shader-quality-changed(v) => { root.shader-quality = v; root.shader-quality-changed(v); }
+                                    vsync-changed(v) => { root.vsync-mode = v; root.vsync-changed(v); }
+                                }
+                                InteractivitySettings {
+                                    audio-sensitivity: root.audio-sensitivity;
+                                    mouse-interactive: root.mouse-interactive;
+                                    mouse-sensitivity: root.mouse-sensitivity;
+                                    audio-sensitivity-changed(v) => { root.audio-sensitivity = v; root.audio-sensitivity-changed(v); }
+                                    mouse-interactive-toggled(v) => { root.mouse-interactive = v; root.mouse-interactive-toggled(v); }
+                                    mouse-sensitivity-changed(v) => { root.mouse-sensitivity = v; root.mouse-sensitivity-changed(v); }
+                                }
+                                UpdatesSettings { }
+                            }
+                        }
+
+                        // â”€â”€ Narrow: single stacked column â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                        if !settings-area.two-col : VerticalLayout {
+                            spacing: 24px; alignment: start;
+                            AppearanceSettings { theme-changed(m) => { root.theme-changed(m); } }
+                            SystemControlSettings {
+                                autostart: root.autostart; fps-cap: root.fps-cap;
+                                shader-quality: root.shader-quality; vsync-mode: root.vsync-mode;
+                                autostart-toggled(v) => { root.autostart = v; root.autostart-toggled(v); }
+                                fps-cap-changed(v) => { root.fps-cap = v; root.fps-cap-changed(v); }
+                                shader-quality-changed(v) => { root.shader-quality = v; root.shader-quality-changed(v); }
+                                vsync-changed(v) => { root.vsync-mode = v; root.vsync-changed(v); }
+                            }
+                            InteractivitySettings {
+                                audio-sensitivity: root.audio-sensitivity;
+                                mouse-interactive: root.mouse-interactive;
+                                mouse-sensitivity: root.mouse-sensitivity;
+                                audio-sensitivity-changed(v) => { root.audio-sensitivity = v; root.audio-sensitivity-changed(v); }
+                                mouse-interactive-toggled(v) => { root.mouse-interactive = v; root.mouse-interactive-toggled(v); }
+                                mouse-sensitivity-changed(v) => { root.mouse-sensitivity = v; root.mouse-sensitivity-changed(v); }
+                            }
+                            IntegrationsSettings { }
+                            UpdatesSettings { }
+                        }
+                    }
+                }
+            }
+
+            // â•گâ•گ Diagnostics tab â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
+            // == Diagnostics tab ===============================================
+            if root.active-tab == "diagnostics" : diag-area := Rectangle {
+                vertical-stretch: 1;
+                // Explicit, equal card widths (content width minus scrollbar gutter,
+                // padding and inter-card gaps) so the tiles form an even grid.
+                property <length> cw4: (self.width - 106px) / 4;
+                property <length> cw2: (self.width - 58px) / 2;
+                // Height of the stat-card block (one 150px row, or two stacked).
+                property <length> stat-h: root.width >= 1180px ? 150px : 324px;
+
+                ScrollView {
+                    VerticalLayout {
+                        width: diag-area.width - 26px;
+                        padding: 4px; spacing: 24px;
+
+                        // Telemetry stat cards — 4-up on wide windows, 2x2 when narrow.
+                        if root.width >= 1180px : HorizontalLayout {
+                            spacing: 24px; alignment: start;
+                            FpsStatCard { width: diag-area.cw4; fps: root.fps; active: root.engine-active; }
+                            StatCard {
+                                width: diag-area.cw4;
+                                icon: "clock"; icon-bg: #38bdf81f; icon-color: #38bdf8;
+                                label: "FRAME TIME"; value: root.engine-active ? "\{Math.round(root.frame-time * 10) / 10}" : "—"; unit: root.engine-active ? "ms" : "";
+                            }
+                            StatCard {
+                                width: diag-area.cw4;
+                                icon: "database"; icon-bg: Theme.palette.card-hover; icon-color: Theme.palette.text-muted;
+                                label: "VRAM USAGE"; value: root.engine-active ? "\{Math.round(root.vram-usage * 10) / 10}" : "0"; unit: "MB";
+                            }
+                            DebugActionsCard {
+                                width: diag-area.cw4; debug-overlay: root.debug-overlay;
+                                open-debugger => { root.open-debugger(); }
+                                debug-toggled(v) => { root.debug-overlay = v; root.debug-toggled(v); }
+                            }
+                        }
+                        if root.width < 1180px : VerticalLayout {
+                            spacing: 24px;
+                            HorizontalLayout {
+                                spacing: 24px; alignment: start;
+                                FpsStatCard { width: diag-area.cw2; fps: root.fps; active: root.engine-active; }
+                                StatCard {
+                                    width: diag-area.cw2;
+                                    icon: "clock"; icon-bg: #38bdf81f; icon-color: #38bdf8;
+                                    label: "FRAME TIME"; value: root.engine-active ? "\{Math.round(root.frame-time * 10) / 10}" : "—"; unit: root.engine-active ? "ms" : "";
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 24px; alignment: start;
+                                StatCard {
+                                    width: diag-area.cw2;
+                                    icon: "database"; icon-bg: Theme.palette.card-hover; icon-color: Theme.palette.text-muted;
+                                    label: "VRAM USAGE"; value: root.engine-active ? "\{Math.round(root.vram-usage * 10) / 10}" : "0"; unit: "MB";
+                                }
+                                DebugActionsCard {
+                                    width: diag-area.cw2; debug-overlay: root.debug-overlay;
+                                    open-debugger => { root.open-debugger(); }
+                                    debug-toggled(v) => { root.debug-overlay = v; root.debug-toggled(v); }
+                                }
+                            }
+                        }
+
+                        // Diagnostics log panel.  Its height is the space left below
+                        // the stat cards, but never less than 360px — so on a tall
+                        // window it fills, and on the small default window it keeps a
+                        // readable height that pushes the content past the viewport,
+                        // making the outer ScrollView scroll (instead of clipping).
+                        Rectangle {
+                            min-height: (diag-area.height - diag-area.stat-h - 32px) > 360px
+                                      ? (diag-area.height - diag-area.stat-h - 32px) : 360px;
+                            border-radius: 24px;
+                            background: Theme.palette.card; border-width: 1px; border-color: Theme.palette.border;
+                            VerticalLayout {
+                                padding: 24px; spacing: 20px;
+                                HorizontalLayout {
+                                    spacing: 14px;
+                                    Rectangle {
+                                        width: 40px; height: 40px; border-radius: 12px; background: Theme.palette.accent.with-alpha(0.1);
+                                        Icon { name: "terminal"; size: 20px; color: Theme.palette.accent; x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+                                    }
+                                    VerticalLayout {
+                                        horizontal-stretch: 1; alignment: center; spacing: 2px;
+                                        Text { text: "Engine Diagnostics Log"; font-family: Theme.font-headline; font-size: 18px; font-weight: 700; color: Theme.palette.text; }
+                                        Text { text: "Real-time Strata log output"; font-size: 12px; color: Theme.palette.text-muted; }
+                                    }
+                                    Rectangle {
+                                        width: 40px; height: 40px; border-radius: 10px;
+                                        background: cp-ta.has-hover ? Theme.palette.card-hover : transparent;
+                                        animate background { duration: 150ms; }
+                                        Icon { name: "copy"; size: 16px; color: Theme.palette.text-muted; x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+                                        cp-ta := TouchArea { clicked => { root.copy-logs(); } mouse-cursor: pointer; }
+                                    }
+                                }
+                                log-box := Rectangle {
+                                    vertical-stretch: 1; border-radius: 16px; clip: true;
+                                    background: Theme.palette.background;
+                                    border-width: 1px; border-color: Theme.palette.border;
+                                    ScrollView {
+                                        VerticalLayout {
+                                            width: log-box.width - 28px;
+                                            padding: 16px; spacing: 8px; alignment: start;
+                                            for entry in root.logs : HorizontalLayout {
+                                                spacing: 14px;
+                                                Text { text: entry.time; font-family: Theme.font-code; font-size: 11px; font-weight: 700;
+                                                       color: Theme.palette.text-muted; width: 66px; }
+                                                LogLevelBadge { level: entry.level; y: 1px; }
+                                                Text { text: entry.message; font-family: Theme.font-code; font-size: 11px;
+                                                       color: Theme.palette.text; horizontal-stretch: 1; wrap: word-wrap; }
+                                            }
+                                            if root.logs.length == 0 : Text {
+                                                text: "No log output yet.";
+                                                font-family: Theme.font-code; font-size: 11px; color: Theme.palette.text-muted;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Toast overlay ───────────────────────────────────────────────────────
+    // Floats above everything, anchored bottom-right. Plain Rectangles don't
+    // grab pointer input, so only the toast close buttons are interactive — the
+    // rest of the UI underneath stays fully usable.
+    Rectangle {
+        width: 100%; height: 100%;
+        VerticalLayout {
+            alignment: end;
+            HorizontalLayout {
+                alignment: end;
+                padding: 24px;
+                VerticalLayout {
+                    spacing: 10px;
+                    for t[i] in root.toasts : ToastCard {
+                        title: t.title;
+                        description: t.description;
+                        destructive: t.destructive;
+                        dismissed => { root.toast-dismissed(t.id); }
+                    }
+                }
+            }
+        }
+    }
+}

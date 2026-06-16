@@ -1,0 +1,49 @@
+[package]
+name = "strata-desktop"
+version = "1.0.0"
+edition = "2021"
+
+[features]
+default = []
+# Enable real ML depth (DepthAnything via ONNX Runtime) in the Parallax Studio.
+# Off by default (lightweight); release builds turn it on. Without it the Studio
+# uses the dependency-free heuristic depth estimator.
+depth-onnx = ["core-engine/depth-onnx"]
+
+[dependencies]
+core-engine = { path = "../../core-engine" }
+# Blocking HTTP for on-demand depth-model downloads (runs on a worker thread).
+ureq = "2"
+winit = { version = "0.30", features = ["rwh_06"] }
+tokio = { version = "1.38", features = ["full"] }
+env_logger = "0.11"
+log = "0.4"
+slint = { version = "1.16.1", features = ["backend-winit", "renderer-software", "unstable-winit-030"] }
+clap = { version = "4.5", features = ["derive"] }
+image = "0.25"
+rfd = "0.14"
+zip = "2.1"
+display-info = "0.5"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+directories = "5.0"
+dark-light = "1.1"
+auto-launch = "0.5"
+arboard = "3.4"
+
+[target.'cfg(windows)'.dependencies]
+tray-icon = "0.19"
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+    "Win32_System_Console",
+] }
+
+[build-dependencies]
+slint-build = "1.16.1"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
