@@ -142,11 +142,33 @@ impl ParallaxPreviewState {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Render Slint's UI in SOFTWARE (CPU), not on the GPU. Slint's default GPU
-    // renderer (FemtoVG→ANGLE/D3D11) is a second GPU presenter; on NVIDIA it conflicts
-    // with the wallpaper windows' wgpu swapchains — when desktop icons are hidden, the
-    // UI's GPU present blacks out the primary monitor's wallpaper. The wallpaper content
-    // is drawn entirely by our own wgpu surface, so the UI doesn't need the GPU.
+    // Declare Per-Monitor-V2 DPI awareness up front, before any window exists. The old
+    // GPU UI path (FemtoVG→ANGLE→D3D11) established this as a side effect of D3D init;
+    // the software backend does not, which left the process effectively system-DPI-aware
+    // and broke maximize/positioning geometry across our mixed-DPI monitors (window
+    // oversized and parked bottom-right). This is the correct, explicit fix and is a
+    // no-op if winit later sets the same context.
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::UI::HiDpi::{
+            SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        };
+        SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+
+    // Render Slint's UI in SOFTWARE (CPU), not on the GPU. Slint's default GPU renderer
+    // (FemtoVG→ANGLE/D3D11) is a second GPU presenter; on NVIDIA it conflicts with the
+    // wallpaper windows' wgpu swapchains — when desktop icons are hidden, the UI's GPU
+    // present blacks out the primary monitor's wallpaper. The wallpaper content is drawn
+    // entirely by our own wgpu surface, so the UI doesn't need the GPU.
+    //
+    // We tried (2026-06-16) rendering the UI on the SAME wgpu device as the wallpapers to
+    // get GPU UI without the conflict; it failed — two swapchains on one device clash at
+    // DXGI swapchain creation ("Access is denied"), because the wallpaper swapchain is
+    // created cross-thread on a window the shared DXGI factory also drives. See
+    // [[gpu-ui-prototype]] in memory. Software is the proven path; it needs the size-nudge
+    // full-repaint workarounds (`needs_repaint` / `move_settle`) as it only presents the
+    // damaged region.
     #[cfg(windows)]
     if std::env::var_os("SLINT_BACKEND").is_none() {
         std::env::set_var("SLINT_BACKEND", "winit-software");
@@ -667,8 +689,8 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
         _ => dark_light::detect() == dark_light::Mode::Dark,
     };
     ui.global::<Theme>().set_is_dark(is_dark);
-    // Main-window HWND, captured once the winit window exists (see startup spawn_local
-    // below). Used only to keep the theme-aware background brush in sync — Windows only.
+    // Main-window HWND, captured once the winit window exists (startup spawn_local below).
+    // Used to save/restore the window placement across tray hide/show. Windows only.
     #[cfg(target_os = "windows")]
     let ui_hwnd: std::rc::Rc<std::cell::Cell<isize>> = std::rc::Rc::new(std::cell::Cell::new(0));
     ui.set_autostart(config.autostart);
@@ -697,22 +719,29 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_parallax_upscaler_current(SharedString::from(&parallax::upscaler_options()[0]));
 
     #[cfg(target_os = "windows")]
-    let tray = {
+    let (tray, tray_toggle_item) = {
         use tray_icon::{TrayIconBuilder, menu::{Menu, MenuItem}};
         let tray_menu = Menu::new();
-        let show_item = MenuItem::with_id("show", "Show Strata", true, None);
+        // The window starts visible, so the toggle reads "Hide Strata". Its text is
+        // flipped as the window is hidden to / shown from the tray (id stays "show").
+        let toggle_item = MenuItem::with_id("show", "Hide Strata", true, None);
         let quit_item = MenuItem::with_id("quit", "Quit", true, None);
-        let _ = tray_menu.append_items(&[&show_item, &quit_item]);
+        let _ = tray_menu.append_items(&[&toggle_item, &quit_item]);
 
-        Arc::new(Mutex::new(TrayIconBuilder::new()
+        (Arc::new(Mutex::new(TrayIconBuilder::new()
             .with_menu(Box::new(tray_menu))
             .with_tooltip("Strata")
             .with_icon(load_tray_icon(is_dark))
             .build()
-            .unwrap()))
+            .unwrap())),
+         toggle_item)
     };
     #[cfg(target_os = "windows")]
     let tray_handle = tray.clone();
+    // True while the window is hidden to the tray (not just minimized). Drives the
+    // tray menu toggle direction + label.
+    #[cfg(target_os = "windows")]
+    let hidden_to_tray = std::rc::Rc::new(std::cell::Cell::new(false));
 
     // Set up Wallpaper Library
     let wallpapers_base = if std::path::Path::new("wallpapers").exists() {
@@ -1379,8 +1408,6 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
 
     let app_state_theme = app_state.clone();
     let ui_handle_theme = ui.as_weak();
-    #[cfg(target_os = "windows")]
-    let ui_hwnd_theme = ui_hwnd.clone();
     ui.on_theme_changed(move |mode| {
         let mut state = app_state_theme.write().unwrap();
         state.theme_mode = mode.to_string();
@@ -1399,8 +1426,6 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
         {
             let icon = load_tray_icon(is_dark);
             let _ = tray_handle.lock().unwrap().set_icon(Some(icon));
-            // Keep the pre-paint window-erase colour matching the new theme.
-            platform::windows::set_window_bg_brush(ui_hwnd_theme.get(), is_dark);
         }
 
         let mut config = config::Config::load();
@@ -2223,6 +2248,18 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
     // mid-drag). A resize, by contrast, self-heals (it resets softbuffer's buffer age).
     let move_settle = std::rc::Rc::new(std::cell::Cell::new(None::<std::time::Instant>));
     let move_settle_timer = move_settle.clone();
+    // The repaint nudge resizes the window by a pixel — but a `set_size` on a MAXIMIZED
+    // window un-maximizes and repositions it (the "maximize shifts to bottom-right" bug).
+    // Maximizing already fires a real resize that self-heals the buffer, so we simply
+    // skip the nudge while maximized. Kept current by the winit hook.
+    let ui_maximized = std::rc::Rc::new(std::cell::Cell::new(false));
+    let ui_maximized_timer = ui_maximized.clone();
+    #[cfg(target_os = "windows")]
+    let ui_hwnd_timer = ui_hwnd.clone();
+    #[cfg(target_os = "windows")]
+    let toggle_item_timer = tray_toggle_item.clone();
+    #[cfg(target_os = "windows")]
+    let hidden_to_tray_timer = hidden_to_tray.clone();
     // Uptime guard for device-loss recovery: don't auto-relaunch in the first few
     // seconds, so a device that's broken right at startup can't restart-loop.
     let app_start = std::time::Instant::now();
@@ -2465,7 +2502,8 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
             // is a real resize event.
             if let Some(sz) = restore_size.take() {
                 ui.window().set_size(sz);
-            } else if needs_repaint_timer.replace(false) {
+            } else if needs_repaint_timer.replace(false) && !ui_maximized_timer.get() {
+                // Skip while maximized — resizing a maximized window would shift it.
                 let sz = ui.window().size();
                 ui.window().set_size(slint::PhysicalSize::new(sz.width, sz.height + 2));
                 restore_size.set(Some(sz));
@@ -2528,9 +2566,32 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
                 use tray_icon::menu::MenuEvent;
                 if let Ok(event) = MenuEvent::receiver().try_recv() {
                     if event.id == "show" {
-                        ui.show().ok();
-                        ui_visible_timer.set(true);
-                        needs_repaint_timer.set(true); // full repaint (see needs_repaint)
+                        // Toggle: hide to tray if currently shown, else restore.
+                        if hidden_to_tray_timer.get() {
+                            ui.show().ok();
+                            ui_visible_timer.set(true);
+                            hidden_to_tray_timer.set(false);
+                            let _ = toggle_item_timer.set_text("Hide Strata");
+                            // Restore the exact placement saved at close (maximized state +
+                            // monitor). If it landed MAXIMIZED, that resize repaints the
+                            // window on its own. Otherwise the restored size may equal the
+                            // current size (no resize → no repaint), so we still nudge a
+                            // resize to force the full repaint — without it the small window
+                            // comes back as white blocks until a mouse-move / resize.
+                            let maximized = platform::windows::restore_window_placement(ui_hwnd_timer.get());
+                            if !maximized && restore_size.get().is_none() {
+                                let sz = ui.window().size();
+                                ui.window().set_size(slint::PhysicalSize::new(sz.width, sz.height + 2));
+                                restore_size.set(Some(sz));
+                            }
+                        } else {
+                            // Currently shown → hide to tray (mirror the X button).
+                            platform::windows::save_window_placement(ui_hwnd_timer.get());
+                            ui.hide().ok();
+                            ui_visible_timer.set(false);
+                            hidden_to_tray_timer.set(true);
+                            let _ = toggle_item_timer.set_text("Show Strata");
+                        }
                     } else if event.id == "quit" { std::process::exit(0); }
                 }
             }
@@ -2603,8 +2664,22 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
 
     let ui_handle_close = ui.as_weak();
     let ui_visible_close = ui_visible.clone();
+    #[cfg(target_os = "windows")]
+    let ui_hwnd_close = ui_hwnd.clone();
+    #[cfg(target_os = "windows")]
+    let toggle_item_close = tray_toggle_item.clone();
+    #[cfg(target_os = "windows")]
+    let hidden_to_tray_close = hidden_to_tray.clone();
     ui.window().on_close_requested(move || {
         if let Some(ui) = ui_handle_close.upgrade() {
+            // Snapshot placement (maximized state + monitor) BEFORE hiding, so "Show
+            // Strata" can restore the exact geometry — hide()/show() loses it otherwise.
+            #[cfg(target_os = "windows")]
+            {
+                platform::windows::save_window_placement(ui_hwnd_close.get());
+                hidden_to_tray_close.set(true);
+                let _ = toggle_item_close.set_text("Show Strata");
+            }
             ui.hide().ok();
             ui_visible_close.set(false); // hidden to tray — pause unseen work
         }
@@ -2619,17 +2694,31 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
     {
         use slint::winit_030::WinitWindowAccessor;
         use slint::winit_030::winit::event::WindowEvent;
-        let needs_repaint_evt = needs_repaint.clone();
         let ui_visible_evt = ui_visible.clone();
         let move_settle_evt = move_settle.clone();
-        ui.window().on_winit_window_event(move |_win, event| {
+        let ui_maximized_evt = ui_maximized.clone();
+        ui.window().on_winit_window_event(move |win, event| {
+            // NOTE: this fires for EVERY event (incl. high-frequency CursorMoved), so do
+            // only cheap flag-setting here — never per-event syscalls.
             match event {
+                WindowEvent::Resized(_) => {
+                    // Maximized state only changes via a resize; query the syscall here,
+                    // not on every event.
+                    ui_maximized_evt.set(win.is_maximized());
+                    // A maximize/restore fires Moved (which arms the move-debounce) AND a
+                    // Resized. The resize already self-heals the buffer, so cancel any
+                    // pending move-nudge — otherwise the nudge would resize (and shift) the
+                    // just-maximized window a moment later. This is what was dragging the
+                    // maximized window down on the portrait monitor.
+                    move_settle_evt.set(None);
+                }
                 WindowEvent::Occluded(occluded) => {
                     // `Occluded(true)` = minimized/fully hidden; `(false)` = visible again.
+                    // Slint's own backend already forces a full repaint on un-occlude
+                    // (renderer.occluded() → NewBuffer + a redraw), so we must NOT add our
+                    // own resize nudge here — that only causes the restore flicker. We just
+                    // track visibility (to pause the parallax preview while hidden).
                     ui_visible_evt.set(!occluded);
-                    if !occluded {
-                        needs_repaint_evt.set(true); // restore left a stale buffer — repaint
-                    }
                 }
                 WindowEvent::Moved(_) => {
                     // Debounced in the timer — a move can reveal stale (unpainted) regions.
@@ -2641,8 +2730,8 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Once the winit window exists, capture its HWND and set the theme-aware background
-    // brush so the pre-first-paint OS erase matches the UI rather than flashing white.
+    // Capture the main window's HWND once the winit window exists, for tray placement
+    // save/restore (see on_close_requested / the tray "show" handler).
     #[cfg(target_os = "windows")]
     {
         let ui_hwnd_init = ui_hwnd.clone();
@@ -2653,9 +2742,7 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
                     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
                     if let Ok(handle) = w.window_handle() {
                         if let RawWindowHandle::Win32(h) = handle.as_raw() {
-                            let hwnd = h.hwnd.get();
-                            ui_hwnd_init.set(hwnd);
-                            platform::windows::set_window_bg_brush(hwnd, is_dark);
+                            ui_hwnd_init.set(h.hwnd.get());
                         }
                     }
                 }

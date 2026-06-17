@@ -1260,16 +1260,18 @@ component WallpaperCard inherits Rectangle {
         return MonColors.of(root.monitors[idx].color);
     }
 
-    border-radius: 16px;
-    border-width: is-active ? 2px : 1px;
-    border-color: is-active ? Theme.palette.selection : Theme.palette.border;
+    // Top corners SHARP so the full-bleed thumbnail sits flush; bottom corners rounded
+    // to keep the card polished. (Software renderer can't round-clip the child image, so
+    // matching the card's top edge to the image is the clean fix.)
+    border-bottom-left-radius: 16px;
+    border-bottom-right-radius: 16px;
     background: Theme.palette.card;
     drop-shadow-blur: is-active ? 30px : (card-ta.has-hover ? 26px : 14px);
     drop-shadow-color: is-active ? Theme.palette.selection.with-alpha(0.30) : #00000038;
     drop-shadow-offset-y: 8px;
     clip: true;
 
-    animate border-color, drop-shadow-blur, drop-shadow-color { duration: 300ms; easing: ease; }
+    animate drop-shadow-blur, drop-shadow-color { duration: 300ms; easing: ease; }
 
     card-ta := TouchArea { mouse-cursor: default; }
 
@@ -1279,6 +1281,9 @@ component WallpaperCard inherits Rectangle {
         // â"€â"€ Preview band (16:10) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
         Rectangle {
             height: root.width * 10 / 16;
+            // Full-bleed thumbnail with SHARP top corners — the card's top edge is sharp
+            // too (only its bottom corners are rounded), so the square image fits flush.
+            // This sidesteps the software renderer's inability to round-clip a child image.
             clip: true;
             background: Theme.is-dark ? #1a1d24 : #e4e8ef;
 
@@ -1472,6 +1477,19 @@ component WallpaperCard inherits Rectangle {
                 }
             }
         }
+    }
+
+    // Active/selected outline — drawn LAST so it sits ON TOP of the thumbnail.
+    // (The software renderer composites a child image over the parent's border,
+    // unlike femtovg, so the border must be its own top-most overlay.) Matches the
+    // card shape: sharp top, rounded bottom.
+    Rectangle {
+        border-bottom-left-radius: 16px;
+        border-bottom-right-radius: 16px;
+        border-width: root.is-active ? 2px : 1px;
+        border-color: root.is-active ? Theme.palette.selection : Theme.palette.border;
+        background: transparent;
+        animate border-color { duration: 300ms; easing: ease; }
     }
 }
 

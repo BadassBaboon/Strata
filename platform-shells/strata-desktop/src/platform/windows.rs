@@ -13,28 +13,61 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 #[cfg(target_os = "windows")]
 use std::ptr;
 
-// ── Theme-aware window background brush ─────────────────────────────────────────
-// winit registers its window class with a null background brush, so before Slint's
-// software renderer blits its first frame the OS erases the window to white. On a
-// tray restore that white can flash for a frame. Setting the class background brush
-// to the active theme colour makes that erase blend into the loading UI instead.
-// Called once at startup and again on theme change (rare) — never per-frame.
+// ── Main-window placement save/restore ──────────────────────────────────────────
+// Slint's hide()/show() (used for the tray) does NOT preserve the window's maximized
+// state or monitor — show() re-applies the component's preferred size at a default
+// position. So before hiding we snapshot the full WINDOWPLACEMENT (normal rect +
+// maximized/minimized flag + which monitor) and re-apply it on show. SetWindowPlacement
+// also triggers a resize → Slint repaints fully, so it doubles as the bring-up repaint.
 #[cfg(target_os = "windows")]
-pub fn set_window_bg_brush(hwnd: isize, is_dark: bool) {
-    use windows_sys::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{SetClassLongPtrW, GCLP_HBRBACKGROUND};
+thread_local! {
+    static SAVED_PLACEMENT: std::cell::Cell<
+        Option<windows_sys::Win32::UI::WindowsAndMessaging::WINDOWPLACEMENT>
+    > = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(target_os = "windows")]
+pub fn save_window_placement(hwnd: isize) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowPlacement, WINDOWPLACEMENT};
     if hwnd == 0 { return; }
-    // COLORREF is 0x00BBGGRR. Dark #111317 / Light #f3f5f7 — matches AppWindow.background.
-    let color: u32 = if is_dark { 0x0017_1311 } else { 0x00f7_f5f3 };
     unsafe {
-        let brush = CreateSolidBrush(color);
-        if brush == 0 { return; }
-        // Returns the previous class brush. winit's default is null (0) on the first
-        // call; on later (theme-change) calls it's the brush we set, which we delete to
-        // avoid leaking. DeleteObject on a non-handle simply fails harmlessly.
-        let old = SetClassLongPtrW(hwnd as HWND, GCLP_HBRBACKGROUND, brush as isize);
-        if old != 0 { DeleteObject(old as _); }
+        let mut wp: WINDOWPLACEMENT = std::mem::zeroed();
+        wp.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+        if GetWindowPlacement(hwnd as HWND, &mut wp) != 0 {
+            SAVED_PLACEMENT.with(|c| c.set(Some(wp)));
+        }
     }
+}
+
+/// Re-apply the placement saved by `save_window_placement`. Returns true if the window
+/// was restored to a MAXIMIZED state — in that case the maximize already resizes the
+/// window (so it repaints itself) and the caller must NOT add a size nudge (that would
+/// un-maximize it). For a normal restore the size may be unchanged (→ no resize → no
+/// repaint), so the caller still needs its nudge.
+#[cfg(target_os = "windows")]
+pub fn restore_window_placement(hwnd: isize) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SetWindowPlacement, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SW_SHOWNORMAL,
+        WPF_RESTORETOMAXIMIZED,
+    };
+    if hwnd == 0 { return false; }
+    SAVED_PLACEMENT.with(|c| {
+        if let Some(mut wp) = c.get() {
+            // Never restore to MINIMIZED — the user asked to show it. Fall back to the
+            // "restore-to" target (maximized if it was maximized before minimizing).
+            if wp.showCmd == SW_SHOWMINIMIZED as u32 {
+                wp.showCmd = if (wp.flags & WPF_RESTORETOMAXIMIZED) != 0 {
+                    SW_SHOWMAXIMIZED as u32
+                } else {
+                    SW_SHOWNORMAL as u32
+                };
+            }
+            unsafe { SetWindowPlacement(hwnd as HWND, &wp); }
+            wp.showCmd == SW_SHOWMAXIMIZED as u32
+        } else {
+            false
+        }
+    })
 }
 
 // ── WorkerW detection ─────────────────────────────────────────────────────────
