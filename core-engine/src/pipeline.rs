@@ -101,6 +101,13 @@ pub struct RenderPassState {
     pub uniform_bind_group: wgpu::BindGroup,
     // Pre-created bind groups for channel bindings: [0] for read_index = 0, [1] for read_index = 1
     pub channel_bind_groups: [wgpu::BindGroup; 2],
+    // This pass's channel bind-group layout. Per-pass (not shared) because a pass
+    // may declare some channels as cubemaps (Cube view dimension) while another
+    // pass uses plain 2D textures for the same channel index.
+    pub channel_layout: wgpu::BindGroupLayout,
+    // Per-channel cubemap flag for this pass (mirrors the layout); used to rebuild
+    // bind groups on resize.
+    pub cube_channels: [bool; 4],
 }
 
 pub struct WallpaperPipeline {
@@ -110,8 +117,10 @@ pub struct WallpaperPipeline {
     pub textures: HashMap<String, LoadedTexture>,
     pub targets: HashMap<String, RenderTargetData>,
     pub default_view: wgpu::TextureView,
+    // 1×1 default cube view for unbound/failed cubemap channels, so a Cube layout
+    // entry always has a Cube view to bind.
+    pub default_cube_view: wgpu::TextureView,
     pub default_sampler: wgpu::Sampler,
-    pub channel_bind_group_layout: wgpu::BindGroupLayout,
     // 512×2 audio texture (row0=FFT, row1=waveform) for shaders with an `audio`
     // iChannel; updated every frame from the shared AudioEngine. None if unused.
     pub audio_texture: Option<wgpu::Texture>,
@@ -171,6 +180,34 @@ impl WallpaperPipeline {
         );
         let default_view = default_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
+        // 1×1 white cube (6 faces) used for any cubemap channel slot that has no
+        // loaded texture, so a Cube layout entry always has a matching Cube view.
+        let default_cube_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Default Cube 1x1"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 6 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &default_cube_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[255u8; 4 * 6],
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 6 },
+        );
+        let default_cube_view = default_cube_texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::Cube),
+            ..Default::default()
+        });
+
         // If any pass binds an `audio` channel, create the 512×2 audio texture
         // up front so the channel bind groups can reference it (vs. the 1×1
         // default). render() fills it each frame from the AudioEngine.
@@ -211,8 +248,16 @@ impl WallpaperPipeline {
                 if binding.binding_type == "texture" {
                     if let Some(ref path) = binding.path {
                         if !textures.contains_key(path) {
-                            let full_path = wallpaper_dir.join(path);
+                            let full_path = crate::resolve_asset(wallpaper_dir, path);
                             let loaded = Self::load_texture_file(device, queue, &full_path)?;
+                            textures.insert(path.clone(), loaded);
+                        }
+                    }
+                } else if binding.binding_type == "cubemap" {
+                    if let Some(ref path) = binding.path {
+                        if !textures.contains_key(path) {
+                            let full_path = crate::resolve_asset(wallpaper_dir, path);
+                            let loaded = Self::load_cube_texture(device, queue, &full_path)?;
                             textures.insert(path.clone(), loaded);
                         }
                     }
@@ -235,32 +280,9 @@ impl WallpaperPipeline {
             }
         }
 
-        // Setup the Set 1 (Channels) Bind Group Layout
-        // It has 8 entries: 4 pairs of (Texture, Sampler)
-        let mut layout_entries = Vec::new();
-        for i in 0..4 {
-            let binding_idx = i * 2;
-            layout_entries.push(wgpu::BindGroupLayoutEntry {
-                binding: binding_idx,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            });
-            layout_entries.push(wgpu::BindGroupLayoutEntry {
-                binding: binding_idx + 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            });
-        }
-        let channel_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Channel Bind Group Layout"),
-            entries: &layout_entries,
-        });
+        // The Set 1 (Channels) bind-group layout is built per pass (below) from
+        // that pass's cubemap mask, since a channel may be a cubemap in one pass
+        // and a 2D texture in another.
 
         // Compile Vertex Shader Module
         // We optimize vertex execution using the gl_VertexIndex full-screen triangle trick
@@ -298,7 +320,12 @@ void main() {
             let fs_raw = std::fs::read_to_string(&fs_path)
                 .map_err(|e| format!("Failed to read pass shader file {}: {}", pass_cfg.source, e))?;
 
-            let (fs_preprocessed, fs_map) = preprocess_shader(&fs_raw, common_glsl.as_deref(), wgpu::naga::ShaderStage::Fragment, pass_name == "image");
+            // Which channels this pass declares as cubemaps (for shader header +
+            // matching bind-group layout view dimension).
+            let cube_channels = Self::pass_cube_channels(&pass_cfg.bindings);
+            let channel_layout = Self::channel_layout_for(device, cube_channels);
+
+            let (fs_preprocessed, fs_map) = preprocess_shader(&fs_raw, common_glsl.as_deref(), wgpu::naga::ShaderStage::Fragment, pass_name == "image", cube_channels);
             let fs_module = compile_shader_mapped(&fs_preprocessed, wgpu::naga::ShaderStage::Fragment, Some(&fs_map))
                 .map_err(|e| format!("'{}' pass '{}' GLSL compile failed:\n{}", wname, pass_name, e))?;
             log::debug!("  '{}' pass '{}' GLSL→naga OK ({} src lines)", wname, pass_name, fs_preprocessed.lines().count());
@@ -313,7 +340,7 @@ void main() {
                 label: Some(&format!("Pass '{}' Pipeline Layout", pass_name)),
                 bind_group_layouts: &[
                     Some(global_uniform_layout),
-                    Some(&channel_bind_group_layout),
+                    Some(&channel_layout),
                 ],
                 immediate_size: 0,
             });
@@ -370,13 +397,13 @@ void main() {
             // correct (current vs previous frame) ping-pong slot for this pass.
             let channel_bind_groups = [
                 Self::create_channel_bind_group(
-                    device, &channel_bind_group_layout, &pass_cfg.bindings,
-                    &textures, &targets, &default_view, &default_sampler,
+                    device, &channel_layout, &pass_cfg.bindings,
+                    &textures, &targets, &default_view, &default_cube_view, &default_sampler,
                     audio_view.as_ref(), pass_index, &config.wallpaper.passes, 0,
                 ),
                 Self::create_channel_bind_group(
-                    device, &channel_bind_group_layout, &pass_cfg.bindings,
-                    &textures, &targets, &default_view, &default_sampler,
+                    device, &channel_layout, &pass_cfg.bindings,
+                    &textures, &targets, &default_view, &default_cube_view, &default_sampler,
                     audio_view.as_ref(), pass_index, &config.wallpaper.passes, 1,
                 ),
             ];
@@ -405,6 +432,8 @@ void main() {
                 uniform_buffer,
                 uniform_bind_group,
                 channel_bind_groups,
+                channel_layout,
+                cube_channels,
             });
         }
 
@@ -418,8 +447,8 @@ void main() {
             textures,
             targets,
             default_view,
+            default_cube_view,
             default_sampler,
-            channel_bind_group_layout,
             audio_texture,
             audio_view,
         })
@@ -449,6 +478,7 @@ void main() {
         loaded_textures: &HashMap<String, LoadedTexture>,
         targets: &HashMap<String, RenderTargetData>,
         default_view: &wgpu::TextureView,
+        default_cube_view: &wgpu::TextureView,
         default_sampler: &wgpu::Sampler,
         audio_view: Option<&wgpu::TextureView>,
         // Render-graph slot resolution: `this_index` is this pass's position in
@@ -458,9 +488,15 @@ void main() {
         pass_order: &[String],
         parity: usize,
     ) -> wgpu::BindGroup {
-        // Collect bindings. There are 8 slots (4 pairs). Start with default 1x1 mappings.
+        // Collect bindings. There are 8 slots (4 pairs). Start with default mappings:
+        // cubemap channels get the 1×1 default cube view (matching their Cube layout
+        // entry), all others the 1×1 default 2D view.
+        let cube_channels = Self::pass_cube_channels(bindings);
         let mut resources: Vec<(u32, &wgpu::TextureView, &wgpu::Sampler)> = (0..4)
-            .map(|i| (i * 2, default_view, default_sampler))
+            .map(|i| {
+                let dv = if cube_channels[i as usize] { default_cube_view } else { default_view };
+                (i * 2, dv, default_sampler)
+            })
             .collect();
 
         // Override with manifest bindings
@@ -468,7 +504,7 @@ void main() {
             if binding.channel < 4 {
                 let binding_idx = binding.channel * 2;
                 match binding.binding_type.as_str() {
-                    "texture" => {
+                    "texture" | "cubemap" => {
                         if let Some(ref path) = binding.path {
                             if let Some(tex) = loaded_textures.get(path) {
                                 resources[binding.channel as usize] = (binding_idx, &tex.view, default_sampler);
@@ -518,6 +554,115 @@ void main() {
             layout,
             entries: &entries,
         })
+    }
+
+    /// Which of the 4 channels a pass declares as a cubemap, from its bindings.
+    fn pass_cube_channels(bindings: &[BindingConfig]) -> [bool; 4] {
+        let mut mask = [false; 4];
+        for b in bindings {
+            if b.binding_type == "cubemap" && b.channel < 4 {
+                mask[b.channel as usize] = true;
+            }
+        }
+        mask
+    }
+
+    /// Set-1 channel bind-group layout for a pass: 4 (texture, sampler) pairs,
+    /// with the cubemap channels declared as `Cube` view dimension to match the
+    /// `samplerCube` the preprocessor emits for them.
+    fn channel_layout_for(device: &wgpu::Device, cube_channels: [bool; 4]) -> wgpu::BindGroupLayout {
+        let mut entries = Vec::with_capacity(8);
+        for i in 0..4 {
+            let binding_idx = i as u32 * 2;
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: binding_idx,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: if cube_channels[i] {
+                        wgpu::TextureViewDimension::Cube
+                    } else {
+                        wgpu::TextureViewDimension::D2
+                    },
+                    multisampled: false,
+                },
+                count: None,
+            });
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: binding_idx + 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            });
+        }
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Channel Bind Group Layout"),
+            entries: &entries,
+        })
+    }
+
+    /// Load a Shadertoy cubemap into a 6-layer Cube texture. The base-face file is
+    /// `<name>.<ext>`; the other five faces are `<name>_1..<name>_5.<ext>` (the
+    /// export convention), in OpenGL/wgpu face order +X,-X,+Y,-Y,+Z,-Z.
+    fn load_cube_texture(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        base_path: &Path,
+    ) -> Result<LoadedTexture, String> {
+        let ext = base_path.extension().and_then(|e| e.to_str()).unwrap_or("png");
+        let stem = base_path.file_stem().and_then(|s| s.to_str())
+            .ok_or_else(|| format!("Bad cubemap path {:?}", base_path))?;
+        let dir = base_path.parent().unwrap_or_else(|| Path::new("."));
+
+        // Decode all 6 faces first (so dimensions are known + any failure aborts early).
+        let mut faces: Vec<image::RgbaImage> = Vec::with_capacity(6);
+        for f in 0..6 {
+            let face_path = if f == 0 {
+                base_path.to_path_buf()
+            } else {
+                dir.join(format!("{}_{}.{}", stem, f, ext))
+            };
+            let img = image::open(&face_path)
+                .map_err(|e| format!("Failed to open cubemap face {:?}: {}", face_path, e))?;
+            faces.push(img.to_rgba8());
+        }
+        let (w, h) = faces[0].dimensions();
+        if faces.iter().any(|f| f.dimensions() != (w, h)) {
+            return Err(format!("Cubemap faces have mismatched sizes: {:?}", base_path));
+        }
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(&format!("Cubemap {:?}", base_path.file_name())),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 6 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        for (layer, face) in faces.iter().enumerate() {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: 0, y: 0, z: layer as u32 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                face,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * w),
+                    rows_per_image: Some(h),
+                },
+                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+        }
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::Cube),
+            ..Default::default()
+        });
+        Ok(LoadedTexture { texture, view })
     }
 
     fn load_texture_file(
@@ -587,13 +732,13 @@ void main() {
             let pass_cfg = self.config.render_targets.get(&pass.name).unwrap();
             pass.channel_bind_groups = [
                 Self::create_channel_bind_group(
-                    device, &self.channel_bind_group_layout, &pass_cfg.bindings,
-                    &self.textures, &self.targets, &self.default_view, &self.default_sampler,
+                    device, &pass.channel_layout, &pass_cfg.bindings,
+                    &self.textures, &self.targets, &self.default_view, &self.default_cube_view, &self.default_sampler,
                     self.audio_view.as_ref(), pass_index, &self.config.wallpaper.passes, 0,
                 ),
                 Self::create_channel_bind_group(
-                    device, &self.channel_bind_group_layout, &pass_cfg.bindings,
-                    &self.textures, &self.targets, &self.default_view, &self.default_sampler,
+                    device, &pass.channel_layout, &pass_cfg.bindings,
+                    &self.textures, &self.targets, &self.default_view, &self.default_cube_view, &self.default_sampler,
                     self.audio_view.as_ref(), pass_index, &self.config.wallpaper.passes, 1,
                 ),
             ];

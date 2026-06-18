@@ -1,0 +1,28 @@
+# Strata content repositories.
+#
+# Strata ships no shaders/models itself — it fetches them from one or more
+# "library" repositories listed here. Each repository is a Strata-Library-shaped
+# tree (index.toml + shader-library/ + external/ + models.toml + presets.toml),
+# served from an immutable, cacheable URL.
+#
+# For now this file just declares the sources; the fetch/sync logic and a Settings
+# UI to add custom repositories come with the library-decoupling work. Users will
+# be able to add a "Community" repository down the line — keep `Official` first as
+# the trusted default.
+#
+# `url` is the base; the app appends `/index.toml`, `/shader-library/<slug>/…`,
+# `/external/<file>`, etc. Pin an explicit tag (NOT @latest) so a build always
+# resolves a known-good snapshot.
+
+schema_version = 1
+
+[[repository]]
+name = "Official"
+url = "https://cdn.jsdelivr.net/gh/BadassBaboon/Strata-Library@library-v1.0.0"
+official = true
+
+# Example of a future community source (commented out — not fetched):
+# [[repository]]
+# name = "Community"
+# url = "https://cdn.jsdelivr.net/gh/<someone>/strata-community@v1"
+# official = false

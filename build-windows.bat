@@ -173,10 +173,15 @@ if "%ONNX%"=="1" if not "%MODE%"=="clean" if not "%MODE%"=="check" (
       "else { Write-Host '  -> DirectML.dll not found (build may be cached; touch a source file and rebuild)' }"
 )
 
+:: Release modes: assemble a CLEAN distribution folder (see :make_dist below) so
+:: users zip ~tens of MB instead of the whole multi-GB target\release\ tree.
+if /I "%MODE%"=="release" call :make_dist
+
 echo.
 echo ===================================================
 echo [SUCCESS] %SUCCESS_LABEL%!
 echo Output folder: %OUTPUT_DIR%
+if /I "%MODE%"=="release" echo Distribution : dist\Strata  - clean, zip-ready
 echo ===================================================
 goto end_success
 
@@ -192,6 +197,31 @@ exit /b 1
 echo.
 pause
 exit /b 0
+
+:: =====================================================
+:: Distribution packaging (release modes)
+:: =====================================================
+:: Assemble dist\Strata with only what ships: exe + DLLs + repositories.toml +
+:: data dirs. Wallpapers come from Strata-Library\shader-library when present
+:: (it has pre-generated thumbnail.png — a read-only install can't make them
+:: afterwards); otherwise from wallpapers\. Flat command flow (no parenthesised
+:: blocks) to avoid batch paren/escaping pitfalls.
+:make_dist
+echo.
+echo Assembling clean distribution package...
+set "DIST=dist\Strata"
+if exist "!DIST!" rmdir /s /q "!DIST!"
+mkdir "!DIST!"
+copy /y "%OUTPUT_DIR%strata-desktop.exe" "!DIST!\" >nul
+copy /y "%OUTPUT_DIR%*.dll" "!DIST!\" >nul 2>nul
+copy /y "repositories.toml" "!DIST!\" >nul 2>nul
+set "WPSRC=wallpapers"
+if exist "Strata-Library\shader-library" set "WPSRC=Strata-Library\shader-library"
+if not exist "Strata-Library\shader-library" echo   note: Strata-Library not assembled - wallpapers ship without thumbnails
+xcopy /e /i /y /q "!WPSRC!" "!DIST!\wallpapers" >nul
+xcopy /e /i /y /q "assets" "!DIST!\assets" >nul
+echo   Distribution ready: !DIST!  - zip this folder to share
+goto :eof
 
 :: =====================================================
 :: Toolchain bootstrap subroutines

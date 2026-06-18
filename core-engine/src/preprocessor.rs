@@ -37,6 +37,11 @@ pub fn preprocess_shader(
     // the flip for correct on-screen orientation. (Single-pass shaders are
     // image-only, so they're unaffected.)
     final_pass: bool,
+    // Per-channel cubemap flag. A `true` channel is declared `textureCube` /
+    // `samplerCube` (Shadertoy cubemap input) instead of the default 2D sampler,
+    // so `texture(iChannelN, vec3 dir)` works. The pipeline's bind-group layout
+    // for the pass must match (Cube vs D2 view dimension).
+    cube_channels: [bool; 4],
 ) -> (String, SourceMap) {
     // Strip #version but keep a blank line in its place so line numbers in the
     // user's source still line up exactly with the preprocessed source.
@@ -58,8 +63,11 @@ pub fn preprocess_shader(
         }
     }
 
-    // Standard header defining the global uniforms and binding layouts.
-    let header = r#"#version 450
+    // Standard header defining the global uniforms and binding layouts. The
+    // per-channel sampler types depend on `cube_channels` so a cubemap input is
+    // declared `textureCube`/`samplerCube` (Shadertoy `texture(iChannelN, vec3)`).
+    let mut header = String::from(
+        r#"#version 450
 
 layout(std140, set = 0, binding = 0) uniform GlobalUniforms {
     vec3 iResolution;
@@ -79,23 +87,37 @@ layout(std140, set = 0, binding = 0) uniform GlobalUniforms {
     int iBlendMode;
 };
 
-layout(set = 1, binding = 0) uniform texture2D iChannel0_tex;
-layout(set = 1, binding = 1) uniform sampler iChannel0_sampler;
-layout(set = 1, binding = 2) uniform texture2D iChannel1_tex;
-layout(set = 1, binding = 3) uniform sampler iChannel1_sampler;
-layout(set = 1, binding = 4) uniform texture2D iChannel2_tex;
-layout(set = 1, binding = 5) uniform sampler iChannel2_sampler;
-layout(set = 1, binding = 6) uniform texture2D iChannel3_tex;
-layout(set = 1, binding = 7) uniform sampler iChannel3_sampler;
+"#,
+    );
+    for ch in 0..4 {
+        let tex_binding = ch * 2;
+        let smp_binding = ch * 2 + 1;
+        let tex_type = if cube_channels[ch] { "textureCube" } else { "texture2D" };
+        header.push_str(&format!(
+            "layout(set = 1, binding = {tex_binding}) uniform {tex_type} iChannel{ch}_tex;\n\
+             layout(set = 1, binding = {smp_binding}) uniform sampler iChannel{ch}_sampler;\n"
+        ));
+    }
+    header.push('\n');
+    for ch in 0..4 {
+        let smp_type = if cube_channels[ch] { "samplerCube" } else { "sampler2D" };
+        header.push_str(&format!(
+            "#define iChannel{ch} {smp_type}(iChannel{ch}_tex, iChannel{ch}_sampler)\n"
+        ));
+    }
 
-#define iChannel0 sampler2D(iChannel0_tex, iChannel0_sampler)
-#define iChannel1 sampler2D(iChannel1_tex, iChannel1_sampler)
-#define iChannel2 sampler2D(iChannel2_tex, iChannel2_sampler)
-#define iChannel3 sampler2D(iChannel3_tex, iChannel3_sampler)
-"#;
+    // naga's GLSL frontend miscompiles the single-argument matrix constructors
+    // `mat2(vec4)` / `mat2(float)` (the rotation idiom `mat2(cos(a+vec4(...)))`
+    // common in Shadertoy shaders) into a malformed Compose -> "Function is
+    // invalid". The Shadertoy importer rewrites such single-arg `mat2(...)` calls
+    // to `_stm2(...)`; these overloads give the spelled-out, naga-safe form.
+    header.push_str(
+        "\nmat2 _stm2(float s) { return mat2(s, 0.0, 0.0, s); }\n\
+         mat2 _stm2(vec4 v) { return mat2(v.x, v.y, v.z, v.w); }\n",
+    );
 
     let mut preprocessed = String::new();
-    preprocessed.push_str(header);
+    preprocessed.push_str(&header);
     let header_newlines = preprocessed.matches('\n').count();
 
     let has_common = !stripped_common.is_empty();
@@ -167,7 +189,7 @@ mod tests {
     #[test]
     fn test_compile_simple_shader() {
         let source = "void mainImage(out vec4 fragColor, vec2 fragCoord) { fragColor = vec4(1.0); }";
-        let (preprocessed, _map) = preprocess_shader(source, None, ShaderStage::Fragment, true);
+        let (preprocessed, _map) = preprocess_shader(source, None, ShaderStage::Fragment, true, [false;4]);
         let result = compile_shader(&preprocessed, ShaderStage::Fragment);
         if let Err(ref e) = result {
             println!("{}", e);
@@ -190,7 +212,7 @@ mod tests {
             if !image.exists() { continue; }
             let body = std::fs::read_to_string(&image).unwrap();
             let common = std::fs::read_to_string(dir.join("common.glsl")).ok();
-            let (pre, _map) = preprocess_shader(&body, common.as_deref(), ShaderStage::Fragment, true);
+            let (pre, _map) = preprocess_shader(&body, common.as_deref(), ShaderStage::Fragment, true, [false;4]);
             let name = dir.file_name().unwrap().to_string_lossy().to_string();
             match compile_shader(&pre, ShaderStage::Fragment) {
                 Ok(_) => { pass += 1; println!("  PASS  {}", name); }
@@ -203,7 +225,7 @@ mod tests {
     #[test]
     fn test_compile_shader_with_channel() {
         let source = "void mainImage(out vec4 fragColor, vec2 fragCoord) { fragColor = texture(iChannel0, fragCoord/iResolution.xy); }";
-        let (preprocessed, _map) = preprocess_shader(source, None, ShaderStage::Fragment, true);
+        let (preprocessed, _map) = preprocess_shader(source, None, ShaderStage::Fragment, true, [false;4]);
         let result = compile_shader(&preprocessed, ShaderStage::Fragment);
         if let Err(ref e) = result {
             println!("{}", e);

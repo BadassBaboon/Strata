@@ -93,15 +93,6 @@ pub fn download_model(choice: &ModelChoice, mut progress: impl FnMut(u64, u64)) 
     model_file_path(choice).ok_or_else(|| "resolve model path".to_string())
 }
 
-/// The wallpaper library root (same resolution the rest of the shell uses).
-pub fn wallpapers_base() -> PathBuf {
-    if Path::new("wallpapers").exists() {
-        PathBuf::from("wallpapers")
-    } else {
-        PathBuf::from("../../wallpapers")
-    }
-}
-
 /// Estimate depth for `image`. Uses the ONNX model when built with `depth-onnx`
 /// and a downloaded model is supplied; otherwise the heuristic estimator.
 fn estimate_depth(image: &image::DynamicImage, model: Option<&ModelChoice>) -> Result<image::GrayImage, String> {
@@ -128,28 +119,54 @@ pub fn preview_dir() -> Option<PathBuf> {
 
 /// Estimate depth for `image_path` and build a parallax package in the preview
 /// scratch dir (NOT the library). Returns the preview dir. Background-thread work.
+/// Wipe the preview scratch dir so every render starts from a CLEAN package. A single
+/// `remove_dir_all` can fail intermittently on Windows — an antivirus scan (or any
+/// transient handle) on the just-written PNGs / model file briefly locks a file. If that
+/// failure is ignored, stale files survive: e.g. a previous layered render's
+/// `background.png` lingers and the next render's preview shows the OLD inpainted fill
+/// (the "inpainted/upscaled background won't apply" bug). So retry briefly, then belt-and-
+/// suspenders remove the files that decide layered-vs-single so a leftover can't leak in.
+fn prepare_clean_preview_dir(dir: &Path) -> Result<(), String> {
+    for attempt in 0..6 {
+        match std::fs::remove_dir_all(dir) {
+            Ok(_) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(_) if attempt < 5 => std::thread::sleep(std::time::Duration::from_millis(150)),
+            Err(e) => log::warn!("preview dir not fully cleaned ({e}); clearing key files"),
+        }
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("create preview dir: {e}"))?;
+    // These decide how the preview package is interpreted; never let stale ones survive.
+    for f in ["background.png", "mask.png", "image.glsl", "manifest.toml", "depth.png", "image.png"] {
+        let _ = std::fs::remove_file(dir.join(f));
+    }
+    Ok(())
+}
+
 pub fn build_preview(
     image_path: &Path,
     params: &ParallaxParams,
     model: Option<&ModelChoice>,
     seg: &ModelChoice,
-    cinematic: bool,
+    _cinematic: bool, // retained for call-site compat; generation is always cinematic now
     billboard: bool,
     upscaler: Option<&ModelChoice>,
     progress: impl Fn(u32),
 ) -> Result<PathBuf, String> {
     let _ = (seg, billboard, upscaler); // used only under the depth-onnx cinematic path
     let dir = preview_dir().ok_or("no preview dir")?;
-    let _ = std::fs::remove_dir_all(&dir); // start clean each render
+    prepare_clean_preview_dir(&dir)?; // reliably clean BEFORE writing the new package
     progress(5);
     let image = image::open(image_path).map_err(|e| format!("open image {:?}: {e}", image_path))?;
     let depth = estimate_depth(&image, model)?;
-    progress(if cinematic { 35 } else { 70 });
+    progress(35);
 
-    // Cinematic (layered): inpaint the background behind the foreground subjects so
-    // disocclusion reveals real pixels instead of smearing. Needs the ONNX build +
-    // a downloaded LaMa model; otherwise we fall back to single-layer.
-    if cinematic {
+    // Generation is ALWAYS layered/cinematic now — it's the only mode (the plain
+    // non-layered output was inferior in ~99% of cases). The block below builds the
+    // layered package and returns. It only falls through to the single-layer fallback
+    // when the ONNX build or the required models are unavailable — and Automatic mode
+    // downloads the preset's models first, so that path is just a safety net.
+    {
         #[cfg(feature = "depth-onnx")]
         {
             let lama = core_engine::depth::lama_model();
@@ -196,7 +213,7 @@ pub fn build_preview(
                 }
             }
         }
-        log::warn!("Cinematic requested but segmentation/inpaint models unavailable — single-layer");
+        log::warn!("Cinematic models unavailable (ONNX build / models missing) — single-layer fallback");
     }
 
     export_wallpaper(&dir, "Parallax Preview", "Parallax Studio", image_path, &depth, params)?;
@@ -215,7 +232,12 @@ pub fn rebake_params(dir: &Path, params: &ParallaxParams) -> Result<(), String> 
 /// Promote a preview package into the library under `display_name` with `params`
 /// (re-uses the already-estimated depth — no inference). Returns the library dir.
 pub fn save_to_library(preview: &Path, display_name: &str, params: &ParallaxParams) -> Result<PathBuf, String> {
-    let out = unique_dir(&wallpapers_base(), &slugify(display_name));
+    // Parallax creations live in %APPDATA%/strata/parallax-wallpapers (user data),
+    // not the bundled/read-only install library.
+    let base = crate::controller::parallax_library_dir()
+        .ok_or_else(|| "Could not resolve the user data directory".to_string())?;
+    std::fs::create_dir_all(&base).map_err(|e| format!("create {:?}: {e}", base))?;
+    let out = unique_dir(&base, &slugify(display_name));
     std::fs::create_dir_all(&out).map_err(|e| format!("create {:?}: {e}", out))?;
     // Copy the preview's assets verbatim — including image.glsl, which has the baked
     // shader (the layered shader bakes SUBJECT_DEPTH, so we must NOT re-derive it from
@@ -254,44 +276,97 @@ pub fn onnx_available() -> bool {
     cfg!(feature = "depth-onnx")
 }
 
-/// Dropdown labels: the no-model heuristic, plus the DepthAnything tiers ONLY when
-/// this build can actually run them (avoids offering models that silently fall back
-/// to the heuristic in a non-ONNX build).
+/// Manual-mode depth-estimator dropdown labels. In the ONNX build the user MUST pick a
+/// real model (no heuristic "no model" option). Only a non-ONNX build (which can't run
+/// any model) falls back to offering the heuristic so the dropdown isn't empty.
 pub fn model_options() -> Vec<String> {
-    let mut v = vec!["Fast (no model)".to_string()];
     if onnx_available() {
-        v.extend(depth::depth_models().iter().map(|m| m.name.clone()));
+        depth::depth_models().iter().map(|m| clean_label(&m.name)).collect()
+    } else {
+        vec!["Fast (no model)".to_string()]
     }
-    v
 }
 
 /// Map a dropdown label back to its depth model (None = the heuristic option).
 pub fn tier_for_label(label: &str) -> Option<ModelChoice> {
-    depth::depth_models().iter().find(|m| m.name == label).cloned()
-}
-
-/// Status line + whether a Download button should show, for a chosen model file.
-pub fn model_status(choice: &ModelChoice) -> (String, bool) {
-    if !onnx_available() {
-        ("Needs the ONNX build to run".to_string(), false)
-    } else if is_model_downloaded(choice) {
-        (format!("Ready · {}", choice.license), false)
-    } else {
-        (format!("Not downloaded · {} MB · {}", choice.size_mb, choice.license), true)
-    }
+    depth::depth_models().iter().find(|m| clean_label(&m.name) == label).cloned()
 }
 
 /// Upscaler dropdown options: "Off" plus each upscaler model (restores detail to the
 /// LaMa-inpainted background). Only meaningful in the ONNX build + Cinematic mode.
 pub fn upscaler_options() -> Vec<String> {
     let mut v = vec!["Off".to_string()];
-    v.extend(depth::upscale_models().iter().map(|m| m.name.clone()));
+    v.extend(depth::upscale_models().iter().map(|m| clean_label(&m.name)));
     v
 }
 
 /// Resolve an upscaler dropdown label to its model (None = "Off").
 pub fn upscaler_choice_for_label(label: &str) -> Option<ModelChoice> {
-    depth::upscale_models().iter().find(|m| m.name == label).cloned()
+    depth::upscale_models().iter().find(|m| clean_label(&m.name) == label).cloned()
+}
+
+// ── Clean dropdown labels ────────────────────────────────────────────────────────
+// Model `name`s in models.toml carry backend detail (precision · size · license), e.g.
+// "Depth Anything V2 Base · fp16 (195 MB · non-commercial)". The UI should show only the
+// human name; size/license are backend-only (shown in the download queue). Strip at the
+// first " · " or " (".
+pub fn clean_label(name: &str) -> String {
+    let n = name.trim();
+    let mut end = n.len();
+    if let Some(i) = n.find(" · ") { end = end.min(i); }
+    if let Some(i) = n.find(" (") { end = end.min(i); }
+    n[..end].trim().to_string()
+}
+
+// ── Quality presets (Automatic mode) ──────────────────────────────────────────────
+
+/// Preset dropdown labels (preset display names, in registry order).
+pub fn preset_options() -> Vec<String> {
+    depth::presets().iter().map(|p| p.name.clone()).collect()
+}
+
+/// Resolve a preset dropdown label to its preset (defaults to the first).
+pub fn preset_for_label(label: &str) -> &'static depth::Preset {
+    depth::presets().iter().find(|p| p.name == label)
+        .or_else(|| depth::presets().first())
+        .expect("at least one preset")
+}
+
+/// Every model a preset needs to generate (depth + matte + LaMa inpaint + optional
+/// upscaler), in download order. Used to check availability + drive the download queue.
+pub fn preset_required_models(p: &depth::Preset) -> Vec<ModelChoice> {
+    let mut v = Vec::new();
+    if let Some(m) = depth::model_by_id(&p.depth) { v.push(m.clone()); }
+    if let Some(m) = depth::model_by_id(&p.segment) { v.push(m.clone()); }
+    v.push(depth::lama_model());
+    if let Some(m) = depth::preset_upscaler(p) { v.push(m.clone()); }
+    v
+}
+
+/// The subset of `models` not yet on disk (the download queue for a preset/selection).
+pub fn missing_models(models: &[ModelChoice]) -> Vec<ModelChoice> {
+    models.iter().filter(|m| !is_model_downloaded(m)).cloned().collect()
+}
+
+/// Download a list of models sequentially. `progress(index, total, name, size_mb, pct)`
+/// fires as each file streams (index is 1-based for "(i/N)" UI). Skips ones already on
+/// disk. Returns on the first failure.
+pub fn download_models_queue(
+    models: &[ModelChoice],
+    mut progress: impl FnMut(usize, usize, &str, u32, u8),
+) -> Result<(), String> {
+    let queue: Vec<&ModelChoice> = models.iter().filter(|m| !is_model_downloaded(m)).collect();
+    let total = queue.len();
+    for (i, m) in queue.iter().enumerate() {
+        let label = clean_label(&m.name);
+        progress(i + 1, total, &label, m.size_mb, 0);
+        download_model(m, |done, all| {
+            let pct = if all > 0 { ((done * 100) / all).min(100) as u8 } else { 0 };
+            progress(i + 1, total, &label, m.size_mb, pct);
+        })?;
+        progress(i + 1, total, &label, m.size_mb, 100);
+    }
+    Ok(())
 }
 
 /// Parallax-style dropdown options for the Cinematic (layered) path. "Coherent 3D"
@@ -309,57 +384,16 @@ pub fn style_is_billboard(label: &str) -> bool {
 /// Masking-model dropdown options (subject matte). U²-Net is the lightweight
 /// default; BiRefNet-lite is sharper but larger.
 pub fn seg_model_options() -> Vec<String> {
-    depth::segment_models().iter().map(|m| m.name.clone()).collect()
+    depth::segment_models().iter().map(|m| clean_label(&m.name)).collect()
 }
 
 /// Resolve a masking dropdown label to its model (defaults to the first entry).
 pub fn seg_choice_for_label(label: &str) -> ModelChoice {
     depth::segment_models().iter()
-        .find(|m| m.name == label)
+        .find(|m| clean_label(&m.name) == label)
         .or_else(|| depth::segment_models().first())
         .cloned()
         .unwrap_or_else(depth::u2net_model)
-}
-
-/// Cinematic mode needs the chosen segmentation model + LaMa (inpaint).
-pub fn cinematic_models(seg: &ModelChoice) -> [ModelChoice; 2] {
-    [seg.clone(), core_engine::depth::lama_model()]
-}
-
-/// Status line + whether a Download button should show for Cinematic mode.
-pub fn cinematic_status(seg: &ModelChoice) -> (String, bool) {
-    if !onnx_available() {
-        return ("Needs the ONNX build to run".to_string(), false);
-    }
-    let models = cinematic_models(seg);
-    if models.iter().all(is_model_downloaded) {
-        ("Ready · subject + inpaint models".to_string(), false)
-    } else {
-        let total: u32 = models.iter().map(|m| m.size_mb).sum();
-        (format!("Not downloaded · {} MB total", total), true)
-    }
-}
-
-/// Download both cinematic models (chosen matter + LaMa), reporting 0..100 %.
-pub fn download_cinematic(seg: &ModelChoice, mut progress: impl FnMut(u32)) -> Result<(), String> {
-    let models = cinematic_models(seg);
-    let total_mb: f64 = models.iter().map(|m| m.size_mb as f64).sum::<f64>().max(1.0);
-    let mut done_mb = 0.0f64;
-    for m in &models {
-        if is_model_downloaded(m) {
-            done_mb += m.size_mb as f64;
-            progress((done_mb / total_mb * 100.0) as u32);
-            continue;
-        }
-        let base = done_mb;
-        let mb = m.size_mb as f64;
-        download_model(m, |d, t| {
-            let frac = if t > 0 { d as f64 / t as f64 } else { 0.0 };
-            progress(((base + frac * mb) / total_mb * 100.0) as u32);
-        })?;
-        done_mb += mb;
-    }
-    Ok(())
 }
 
 /// Append `-2`, `-3`, … if the slug dir already exists, so creations never clobber.

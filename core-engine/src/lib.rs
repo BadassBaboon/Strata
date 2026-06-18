@@ -9,6 +9,7 @@ pub mod inpaint;
 pub mod segment;
 pub mod upscale;
 pub mod parallax;
+pub mod shadertoy_import;
 
 pub use wgpu;
 pub use manifest::WallpaperConfig;
@@ -17,6 +18,49 @@ pub use uniform::{ShaderUniforms, UniformState};
 
 use std::sync::Arc;
 use winit::window::Window;
+
+use std::path::{Path, PathBuf};
+use std::sync::RwLock;
+
+/// Shared asset search roots (e.g. the Strata-Library `external/` directory).
+/// Shaders reference textures/cubemaps by file name and the engine resolves them
+/// against the wallpaper folder first, then these roots — so library assets live
+/// in ONE place instead of being copied into every wallpaper.
+static ASSET_DIRS: RwLock<Vec<PathBuf>> = RwLock::new(Vec::new());
+
+/// Set the global asset search roots (called once by the shell at startup).
+pub fn set_asset_dirs(dirs: Vec<PathBuf>) {
+    if let Ok(mut g) = ASSET_DIRS.write() {
+        *g = dirs;
+    }
+}
+
+/// Resolve a binding's asset path: the wallpaper folder wins (self-contained
+/// packs), then each shared asset root. Falls back to the local path so callers
+/// surface a clear "not found" error if it exists nowhere.
+pub fn resolve_asset(wallpaper_dir: &Path, rel: &str) -> PathBuf {
+    let local = wallpaper_dir.join(rel);
+    if local.exists() {
+        return local;
+    }
+    if let Ok(dirs) = ASSET_DIRS.read() {
+        for d in dirs.iter() {
+            let p = d.join(rel);
+            if p.exists() {
+                return p;
+            }
+        }
+    }
+    local
+}
+
+/// True if `rel` is resolvable in the wallpaper folder or any shared asset root.
+pub fn asset_exists(wallpaper_dir: &Path, rel: &str) -> bool {
+    if wallpaper_dir.join(rel).exists() {
+        return true;
+    }
+    ASSET_DIRS.read().map(|dirs| dirs.iter().any(|d| d.join(rel).exists())).unwrap_or(false)
+}
 
 pub struct GraphicsContext {
     pub instance: Arc<wgpu::Instance>,
@@ -189,6 +233,10 @@ pub struct Renderer {
     // shaders. 1.0 renders straight to the surface (no overhead).
     quality_scale: f32,
     scene: Option<SceneUpscale>,
+    // Which layers receive the cursor in iMouse: 0 = Off, 1 = All, 2 = Only
+    // shaders (non-parallax), 3 = Only Parallax Studio wallpapers. Layers that
+    // don't get the mouse have iMouse zeroed, so a parallax layer auto-animates.
+    mouse_mode: u8,
 }
 
 /// Reduced-resolution composite target + a fullscreen blit pipeline used to
@@ -209,6 +257,9 @@ pub struct LayerPipeline {
     pub positioning: String,
     pub transform: [f32; 4],
     pub blend_mode: String,
+    // True for Parallax Studio creations (manifest tagged "Parallax"). Drives the
+    // per-mode mouse gating + auto-animation distinction.
+    pub is_parallax: bool,
 }
 
 /// Fullscreen-triangle blit that upscales the reduced-resolution scene target to
@@ -298,6 +349,7 @@ impl Renderer {
             headless_audio: None,
             quality_scale: 1.0,
             scene: None,
+            mouse_mode: 1,
         })
     }
 
@@ -329,6 +381,7 @@ impl Renderer {
             headless_audio: None,
             quality_scale: 1.0,
             scene: None,
+            mouse_mode: 1,
         }
     }
 
@@ -362,6 +415,12 @@ impl Renderer {
             }
             self.scene = None;
         }
+    }
+
+    /// Set which layers receive the cursor (0 = Off, 1 = All, 2 = Only shaders,
+    /// 3 = Only Parallax). Cheap — applied per frame in `encode_frame`.
+    pub fn set_mouse_mode(&mut self, mode: u8) {
+        self.mouse_mode = mode;
     }
 
     /// (Re)build the reduced-resolution scene target + upscale pipeline at `size`.
@@ -484,6 +543,7 @@ impl Renderer {
 
     pub fn add_layer(&mut self, path: &std::path::Path, opacity: f32, scale: f32, positioning: String, transform: [f32; 4], blend_mode: String) -> Result<(), String> {
         let config = manifest::WallpaperConfig::load_from_dir(path)?;
+        let is_parallax = config.wallpaper.tags.iter().any(|t| t.eq_ignore_ascii_case("Parallax"));
         // Build offscreen targets at the current effective (quality-scaled) size.
         let (ew, eh) = self.effective_size();
         let pipeline = pipeline::WallpaperPipeline::new(
@@ -505,6 +565,7 @@ impl Renderer {
             positioning,
             transform,
             blend_mode,
+            is_parallax,
         });
         Ok(())
     }
@@ -622,9 +683,19 @@ impl Renderer {
             let scene_view = if scaling { self.scene.as_ref().map(|s| &s.view) } else { None };
             let image_target_view: &wgpu::TextureView = scene_view.unwrap_or(view);
 
+            let mouse_mode = self.mouse_mode;
             for (layer_idx, layer) in self.pipelines.iter_mut().enumerate() {
+                // Does THIS layer receive the cursor? (Off / All / Only shaders /
+                // Only parallax.) If not, iMouse is zeroed below so the shader sees
+                // "no mouse" — a parallax layer then auto-animates on its own.
+                let layer_gets_mouse = match mouse_mode {
+                    1 => true,
+                    2 => !layer.is_parallax,
+                    3 => layer.is_parallax,
+                    _ => false, // 0 = Off
+                };
                 let pipeline = &mut layer.pipeline;
-                
+
                 // 1. Render internal passes to offscreen targets
                 for pass in &pipeline.passes {
                     if pass.name == "image" { continue; }
@@ -636,6 +707,7 @@ impl Renderer {
 
                     // Update this pass's specific uniform data
                     let mut pass_uniforms = self.uniform_state.uniforms;
+                    if !layer_gets_mouse { pass_uniforms.iMouse = [0.0, 0.0, 0.0, 0.0]; }
                     pass_uniforms.iResolution = [target_size.0 as f32, target_size.1 as f32, 1.0];
                     
                     // Update iChannelResolution for the pass
@@ -704,6 +776,7 @@ impl Renderer {
                     // independent case global_resolution == the monitor size, so
                     // this is identical to the old per-surface behaviour.
                     let mut pass_uniforms = self.uniform_state.uniforms;
+                    if !layer_gets_mouse { pass_uniforms.iMouse = [0.0, 0.0, 0.0, 0.0]; }
                     // "Custom" layers render into a sub-rect (transform = [x,y,w,h]
                     // in surface pixels, top-left origin) via a viewport; the shader
                     // sees the box as its full canvas (iResolution = box size, origin

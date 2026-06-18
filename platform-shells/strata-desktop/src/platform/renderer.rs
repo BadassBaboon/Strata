@@ -1,4 +1,4 @@
-use std::sync::{Arc, atomic::{AtomicBool, AtomicU32, Ordering}, Mutex};
+use std::sync::{Arc, atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering}, Mutex};
 use std::sync::mpsc::{Receiver, channel, Sender};
 use winit::window::Window;
 use crate::platform::EngineCommand;
@@ -15,9 +15,10 @@ pub fn run_renderer(
     // Global frame-rate cap, read live by every monitor loop.  Changing it from
     // the UI takes effect within one frame on all monitors.
     target_fps: Arc<AtomicU32>,
-    // Mouse interactivity: when enabled, every monitor loop feeds the desktop
-    // cursor into its shaders' iMouse (sensitivity = movement gain around centre).
-    mouse_enabled: Arc<AtomicBool>,
+    // Mouse interactivity mode (0=Off,1=All,2=Only shaders,3=Only Parallax): every
+    // monitor loop feeds the desktop cursor into iMouse when the mode isn't Off; the
+    // engine then gates it per-layer by type (sensitivity = gain around centre).
+    mouse_mode: Arc<AtomicU8>,
     mouse_sensitivity: Arc<AtomicU32>, // f32 bits
     // Global render-quality scale (f32 bits), read live by every monitor loop.
     quality_scale: Arc<AtomicU32>,
@@ -44,12 +45,12 @@ pub fn run_renderer(
                     let vram_clone = vram_stats.clone();
                     let fps_clone = fps_stats.clone();
                     let target_fps_clone = target_fps.clone();
-                    let mouse_enabled_clone = mouse_enabled.clone();
+                    let mouse_mode_clone = mouse_mode.clone();
                     let mouse_sensitivity_clone = mouse_sensitivity.clone();
                     let quality_scale_clone = quality_scale.clone();
 
                     std::thread::spawn(move || {
-                        run_monitor_loop(window, surface, initial_size, offset, global_res, layers, rx, context_clone, running_clone, window_id, vram_clone, fps_clone, target_fps_clone, mouse_enabled_clone, mouse_sensitivity_clone, quality_scale_clone);
+                        run_monitor_loop(window, surface, initial_size, offset, global_res, layers, rx, context_clone, running_clone, window_id, vram_clone, fps_clone, target_fps_clone, mouse_mode_clone, mouse_sensitivity_clone, quality_scale_clone);
                     });
 
                     monitors.insert(window_id, tx);
@@ -156,7 +157,7 @@ fn run_monitor_loop(
     vram_stats: Arc<Mutex<HashMap<winit::window::WindowId, f32>>>,
     fps_stats: Arc<Mutex<HashMap<winit::window::WindowId, f32>>>,
     target_fps: Arc<AtomicU32>,
-    mouse_enabled: Arc<AtomicBool>,
+    mouse_mode: Arc<AtomicU8>,
     mouse_sensitivity: Arc<AtomicU32>,
     quality_scale: Arc<AtomicU32>,
 ) {
@@ -277,11 +278,17 @@ fn run_monitor_loop(
         // unchanged; rebuilds the scene target only when the value actually moves).
         renderer.set_quality(f32::from_bits(quality_scale.load(Ordering::Relaxed)));
 
-        // Feed the desktop cursor into iMouse when mouse interactivity is on.
-        // mouse_down is (re)applied every frame rather than latched: a SetLayers
-        // rebuilds the pipelines' uniform state, so a one-shot latch would leave
-        // freshly-applied wallpapers with iMouse.z=0 until the setting was toggled.
-        if mouse_enabled.load(Ordering::Relaxed) {
+        // Tell the engine the current mode; it gates iMouse per layer by type
+        // (and zeroes it for non-eligible layers, so parallax layers auto-animate).
+        let mode = mouse_mode.load(Ordering::Relaxed);
+        renderer.set_mouse_mode(mode);
+
+        // Feed the desktop cursor into iMouse whenever the mode isn't Off (the
+        // engine decides which layers actually receive it). mouse_down is
+        // (re)applied every frame rather than latched: a SetLayers rebuilds the
+        // pipelines' uniform state, so a one-shot latch would leave freshly-applied
+        // wallpapers with iMouse.z=0 until the setting was toggled.
+        if mode != 0 {
             if let Some((cx, cy)) = get_cursor_pos() {
                 let w = renderer.size.width as f32;
                 let h = renderer.size.height as f32;

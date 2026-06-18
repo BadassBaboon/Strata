@@ -18,15 +18,30 @@ pub struct Config {
     // Audio-reactivity sensitivity (spectrum gain). 1.0 = default.
     #[serde(default = "default_audio_sensitivity")]
     pub audio_sensitivity: f32,
-    // Feed the desktop cursor into shaders' iMouse (e.g. 1D Radial Lightmap).
-    #[serde(default)]
-    pub mouse_interactive: bool,
+    // Which wallpapers receive the desktop cursor in iMouse. One of:
+    // "Off" | "On (Everything)" | "On (Only Shaders)" | "On (Only Parallax Studio)".
+    // (Replaces the legacy `mouse_interactive` bool, which serde now ignores.)
+    #[serde(default = "default_mouse_mode")]
+    pub mouse_mode: String,
     #[serde(default = "default_mouse_sensitivity")]
     pub mouse_sensitivity: f32,
     // Global render-quality preset label (maps to a render scale in the shell).
     #[serde(default = "default_shader_quality")]
     pub shader_quality: String,
+    // Installed Strata-Library version (from its index.toml). Compared to the
+    // remote library version during update checks. Defaults to the shipped 1.0.0.
+    #[serde(default = "default_library_version")]
+    pub library_version: String,
+    // Unix seconds of the last automatic update check (app + library). 0 = never.
+    // The check runs at most ~weekly so launches stay fast and offline-friendly.
+    #[serde(default)]
+    pub last_update_check: i64,
     pub monitors: Vec<MonitorConfig>,
+}
+
+/// Default installed asset-library version (matches the shipped Strata-Library).
+pub fn default_library_version() -> String {
+    "1.0.0".to_string()
 }
 
 /// Default wallpaper frame cap — 60 FPS is the industry-standard smooth baseline.
@@ -42,6 +57,12 @@ pub fn default_audio_sensitivity() -> f32 {
 /// Default mouse sensitivity multiplier (1.0 = cursor tracks 1:1).
 pub fn default_mouse_sensitivity() -> f32 {
     1.0
+}
+
+/// Default mouse-interactivity mode — only Parallax Studio wallpapers follow the
+/// cursor (shaders stay non-interactive unless the user opts in).
+pub fn default_mouse_mode() -> String {
+    "On (Only Parallax Studio)".to_string()
 }
 
 /// Default shader-quality preset — full native resolution.
@@ -84,9 +105,11 @@ impl Config {
             autostart: false,
             target_fps: default_target_fps(),
             audio_sensitivity: default_audio_sensitivity(),
-            mouse_interactive: false,
+            mouse_mode: default_mouse_mode(),
             mouse_sensitivity: default_mouse_sensitivity(),
             shader_quality: default_shader_quality(),
+            library_version: default_library_version(),
+            last_update_check: 0,
             monitors: Vec::new(),
         }
     }

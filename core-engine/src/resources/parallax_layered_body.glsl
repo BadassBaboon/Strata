@@ -57,11 +57,21 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 st = vec2(uv.x, 1.0 - uv.y);
     st = (st - 0.5) / ZOOM + 0.5;
 
-    // Camera offset from the cursor when interactive; otherwise still.
-    vec2 v = vec2(0.0);
+    // Camera offset. When the cursor drives this layer (mouse interactivity on for
+    // it) follow it; otherwise drift on a slow Lissajous path so the layers keep
+    // gently, smoothly moving on their own instead of sitting as a dead still image.
+    vec2 v;
     if (iMouse.z > 0.5) {
-        v = (iMouse.xy / iResolution.xy - 0.5) * 2.0;
+        // Gentle cursor follow. A LOW gain (0.6, was 2.0) keeps the parallax subtle:
+        // the displacement is `v * HEIGHT`, and a large displacement is what smears
+        // near/inpainted layers and the background as the cursor moves. This restores
+        // the calm feel of the original automatic-mode wallpapers.
+        v = (iMouse.xy / iResolution.xy - 0.5) * 0.6;
         v.y = -v.y;
+    } else {
+        // Idle drift (no cursor driving this layer): slow Lissajous, kept subtle
+        // (amplitude 0.4, trimmed ~20% from 0.5).
+        v = vec2(sin(iTime * 0.23), sin(iTime * 0.31 + 1.7)) * 0.4;
     }
 
     // Background: per-pixel depth parallax against the smooth background depth.

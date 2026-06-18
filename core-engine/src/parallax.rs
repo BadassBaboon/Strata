@@ -20,10 +20,12 @@ pub struct ParallaxParams {
 
 impl Default for ParallaxParams {
     fn default() -> Self {
-        // Conservative defaults: gentle depth. Strong displacement on a noisy depth
-        // map smears/folds badly (and reveals more disocclusion than the inpaint fill
-        // covers), so users dial it up from a calm baseline.
-        Self { height: 0.06, zoom: 1.06, steps: 10 }
+        // Unified default for both Automatic and Manual modes (user-preferred feel).
+        // `height` is the parallax strength: the cursor offset is scaled by it, so
+        // HIGHER = a more pronounced layer shift, lower = subtler. 0.2 is the sweet
+        // spot for typical photos; very noisy depth maps may smear at this strength,
+        // in which case lower it per-image in Manual mode.
+        Self { height: 0.2, zoom: 1.06, steps: 10 }
     }
 }
 
@@ -60,7 +62,7 @@ pub fn parallax_shader(params: &ParallaxParams) -> String {
 /// max per-pixel depth contribution (0 = rigid plane); `max_delta` caps any part's depth
 /// deviation from the anchor (anti-smear); `feet_y`/`head_y` (texture-space Y of the
 /// subject's contact band and top) drive the anchor-weighted damp ramp.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct LayeredStyle {
     pub subject_depth: f32,
     pub bg_factor: f32,
@@ -296,7 +298,24 @@ pub fn export_layered_wallpaper(
     };
     std::fs::write(out_dir.join("image.glsl"), parallax_shader_layered(params, style))
         .map_err(|e| format!("write image.glsl: {e}"))?;
+    // Sidecar holding the auto-computed style so the Studio's tuning sliders can RE-BAKE
+    // the shader live (new ParallaxParams) without re-running depth/segmentation/inpaint.
+    // Preview-only: save_to_library doesn't copy it (the finished wallpaper just renders).
+    if let Ok(s) = toml::to_string(&style) {
+        let _ = std::fs::write(out_dir.join("style.toml"), s);
+    }
     write_manifest(out_dir, name, author, true)
+}
+
+/// Re-bake ONLY the shader (`image.glsl`) of an existing layered preview package with new
+/// `params`, reusing the cached depth/background/mask + the `style.toml` sidecar — so the
+/// tuning sliders update the look instantly without re-estimating depth or inpainting.
+pub fn rebake_layered(dir: &Path, params: &ParallaxParams) -> Result<(), String> {
+    let style_src = std::fs::read_to_string(dir.join("style.toml"))
+        .map_err(|e| format!("read style.toml: {e}"))?;
+    let style: LayeredStyle = toml::from_str(&style_src).map_err(|e| format!("parse style.toml: {e}"))?;
+    std::fs::write(dir.join("image.glsl"), parallax_shader_layered(params, style))
+        .map_err(|e| format!("rebake image.glsl: {e}"))
 }
 
 #[cfg(test)]

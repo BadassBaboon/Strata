@@ -96,7 +96,7 @@ fn layered_composites_foreground_over_inpainted_background() {
     depth.save(dir.join("depth.png")).unwrap();
     mask.save(dir.join("mask.png")).unwrap();
     std::fs::write(dir.join("image.glsl"),
-        core_engine::parallax::parallax_shader_layered(&core_engine::parallax::ParallaxParams::default())).unwrap();
+        core_engine::parallax::parallax_shader_layered(&core_engine::parallax::ParallaxParams::default(), core_engine::parallax::LayeredStyle::default())).unwrap();
     std::fs::write(dir.join("manifest.toml"), r#"
 [wallpaper]
 name = "Layered Test"

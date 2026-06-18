@@ -38,6 +38,9 @@ pub fn upscale_4x(model_path: &Path, image: &RgbImage) -> Result<RgbImage, Strin
         .map_err(|e| format!("ort session builder: {e}"))?
         .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level1)
         .map_err(|e| format!("ort optimization level: {e}"))?
+        // Free the working set when the session drops (see depth.rs) — no retained arena.
+        .with_memory_pattern(false)
+        .map_err(|e| format!("ort memory pattern: {e}"))?
         .commit_from_file(model_path)
         .map_err(|e| format!("load upscaler {:?}: {e}", model_path))?;
 

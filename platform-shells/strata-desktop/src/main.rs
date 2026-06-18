@@ -18,7 +18,7 @@ mod config;
 mod parallax;
 
 use platform::EngineCommand;
-use controller::{AppState, scan_wallpapers, import_wallpaper_zip, discover_monitors, LayerInfo};
+use controller::{AppState, import_wallpaper_zip, discover_monitors, LayerInfo};
 
 slint::include_modules!();
 
@@ -174,6 +174,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::set_var("SLINT_BACKEND", "winit-software");
     }
 
+    // Register the shared asset roots so shaders resolve textures/cubemaps by name
+    // from the library `external/` dir instead of carrying copies per-wallpaper.
+    core_engine::set_asset_dirs(controller::library_asset_dirs());
+
     // GUI-subsystem release builds have no console of their own. If we were
     // launched from a terminal (e.g. `strata-desktop.exe --version`), attach to
     // the parent's console so clap's version/help text is actually visible.
@@ -199,7 +203,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::init();
         run_cli_mode(wallpaper_path)
     } else {
-        run_ui_mode()
+        run_ui_mode(args.minimized)
     }
 }
 
@@ -607,7 +611,7 @@ fn sync_wallpaper_windows(
     spawn_wallpaper_windows(app_state, command_tx, context, store);
 }
 
-fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
+fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> {
     let app_state = Arc::new(std::sync::RwLock::new(AppState::default()));
     let (command_tx, command_rx) = channel::<EngineCommand>();
     let running = Arc::new(AtomicBool::new(true));
@@ -640,7 +644,8 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
 
     // Mouse interactivity: shared atomics read live by every monitor render loop
     // (feeds the desktop cursor into shaders' iMouse). f32 sensitivity is bit-cast.
-    let mouse_enabled = Arc::new(std::sync::atomic::AtomicBool::new(config.mouse_interactive));
+    // `mouse_mode`: 0=Off, 1=All, 2=Only shaders, 3=Only Parallax (see mouse_mode_to_u8).
+    let mouse_mode = Arc::new(std::sync::atomic::AtomicU8::new(mouse_mode_to_u8(&config.mouse_mode)));
     let mouse_sensitivity = Arc::new(std::sync::atomic::AtomicU32::new(config.mouse_sensitivity.to_bits()));
 
     // Global render-quality scale (f32 bits), read live by every monitor loop.
@@ -696,15 +701,18 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_autostart(config.autostart);
     ui.set_fps_cap(config.target_fps.clamp(1, 240) as i32);
     ui.set_audio_sensitivity(config.audio_sensitivity);
-    ui.set_mouse_interactive(config.mouse_interactive);
+    ui.set_mouse_mode(SharedString::from(&config.mouse_mode));
     ui.set_mouse_sensitivity(config.mouse_sensitivity);
     ui.set_shader_quality(SharedString::from(&config.shader_quality));
+    ui.set_update_version_badge(SharedString::from(format!("v{} (LATEST)", env!("CARGO_PKG_VERSION"))));
+    ui.set_lib_update_version_badge(SharedString::from(format!("v{} (LATEST)", config.library_version)));
 
     // Parallax Studio: populate the depth-model dropdown (heuristic + tiers).
     ui.set_parallax_model_options(ModelRc::from(Rc::new(VecModel::from(
         parallax::model_options().iter().map(SharedString::from).collect::<Vec<_>>(),
     ))));
-    ui.set_parallax_model_current(SharedString::from("Fast (no model)"));
+    ui.set_parallax_model_current(SharedString::from(
+        parallax::model_options().first().map(String::as_str).unwrap_or("")));
     ui.set_parallax_seg_options(ModelRc::from(Rc::new(VecModel::from(
         parallax::seg_model_options().iter().map(SharedString::from).collect::<Vec<_>>(),
     ))));
@@ -717,6 +725,15 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
         parallax::upscaler_options().iter().map(SharedString::from).collect::<Vec<_>>(),
     ))));
     ui.set_parallax_upscaler_current(SharedString::from(&parallax::upscaler_options()[0]));
+    // Automatic-mode quality presets (data-driven from presets.toml) + the pro-tip.
+    ui.set_parallax_preset_options(ModelRc::from(Rc::new(VecModel::from(
+        parallax::preset_options().iter().map(SharedString::from).collect::<Vec<_>>(),
+    ))));
+    ui.set_parallax_preset_current(SharedString::from(
+        parallax::preset_options().first().map(String::as_str).unwrap_or("")));
+    ui.set_parallax_protip(SharedString::from(&core_engine::depth::preset_meta().protip));
+    // Initial "needs download?" for the default preset's models.
+    refresh_parallax_download_state(&ui);
 
     #[cfg(target_os = "windows")]
     let (tray, tray_toggle_item) = {
@@ -743,14 +760,8 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "windows")]
     let hidden_to_tray = std::rc::Rc::new(std::cell::Cell::new(false));
 
-    // Set up Wallpaper Library
-    let wallpapers_base = if std::path::Path::new("wallpapers").exists() {
-        std::path::Path::new("wallpapers")
-    } else {
-        std::path::Path::new("../../wallpapers")
-    };
-    
-    let wallpaper_entries = scan_wallpapers(wallpapers_base);
+    // Set up Wallpaper Library: bundled library + user roots (parallax + imports).
+    let wallpaper_entries = controller::scan_all_wallpapers();
     {
         let mut state = app_state.write().unwrap();
         state.wallpapers = wallpaper_entries.clone();
@@ -764,8 +775,10 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
             let mut item = WallpaperItem::default();
             item.name = SharedString::from(&w.name);
             item.author = SharedString::from(&w.author);
+            item.source_url = SharedString::from(&w.source_url);
             item.tags = ModelRc::from(Rc::new(VecModel::from(w.tags.iter().map(|t| SharedString::from(t.as_str())).collect::<Vec<_>>())));
             item.is_parallax = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Parallax"));
+            item.is_imported = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Imported"));
             item.visible = true;
             if let Some(ref thumb) = w.thumbnail {
                 if let Ok(slint_img) = Image::load_from_path(thumb) {
@@ -895,15 +908,19 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
     let parallax_busy = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (parallax_tx, parallax_rx) = std::sync::mpsc::channel::<Result<String, String>>();
     // Depth-model selection (dropdown label) + on-demand download state.
-    let parallax_model: Rc<std::cell::RefCell<String>> = Rc::new(std::cell::RefCell::new("Fast (no model)".to_string()));
+    // Manual-mode depth model (defaults to the first real model — no "no model" option).
+    let parallax_model: Rc<std::cell::RefCell<String>> = Rc::new(std::cell::RefCell::new(
+        parallax::model_options().first().cloned().unwrap_or_default()));
     let parallax_downloading = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let download_pct = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let (download_tx, download_rx) = std::sync::mpsc::channel::<Result<String, String>>();
-    // Cinematic (layered/LDI) mode + which download is in flight (depth vs LaMa),
-    // so the timer routes the progress text to the right status line.
-    let parallax_cinematic = Rc::new(std::cell::Cell::new(false));
-    let download_is_lama = Rc::new(std::cell::Cell::new(false));
-    // Selected masking (segmentation) model label for cinematic mode.
+    // Live download-queue line ("Depth Anything V2 Base · 195 MB (1/3)") updated by the
+    // download thread, mirrored to the UI by the timer (paired with download_pct).
+    let parallax_dl_text: Arc<std::sync::Mutex<String>> = Arc::new(std::sync::Mutex::new(String::new()));
+    // Automatic-mode quality preset (display name); generation is always cinematic now.
+    let parallax_preset: Rc<std::cell::RefCell<String>> = Rc::new(std::cell::RefCell::new(
+        parallax::preset_options().first().cloned().unwrap_or_default()));
+    // Selected masking (segmentation) model label for Manual mode.
     let parallax_seg: Rc<std::cell::RefCell<String>> =
         Rc::new(std::cell::RefCell::new(parallax::seg_model_options()[0].clone()));
     // Selected parallax style label (Coherent 3D vs Billboard) for cinematic mode.
@@ -921,6 +938,10 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
     let preview_state: Rc<std::cell::RefCell<Option<ParallaxPreviewState>>> = Rc::new(std::cell::RefCell::new(None));
     let parallax_params: Rc<std::cell::Cell<core_engine::parallax::ParallaxParams>> =
         Rc::new(std::cell::Cell::new(core_engine::parallax::ParallaxParams::default()));
+    // Set when a tuning slider moves; the timer debounces it and re-bakes the preview
+    // shader live (reusing cached depth/inpaint) once dragging settles.
+    let parallax_tune_settle: Rc<std::cell::Cell<Option<std::time::Instant>>> =
+        Rc::new(std::cell::Cell::new(None));
     // NOTE: thumbnail generation is deliberately NOT kicked off at startup — we
     // want the lightest possible launch footprint (no extra GPU context, no
     // compile burst) so Strata starts fast alongside the user's other autostart
@@ -960,19 +981,41 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
     let thumbnails_busy_import = thumbnails_busy.clone();
     ui.on_import_requested(move || {
         if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Wallpaper ZIP", &["zip"])
-            .pick_file() 
+            .add_filter("Shader or Wallpaper (.zip, .json)", &["zip", "json"])
+            .add_filter("Shadertoy export (.json)", &["json"])
+            .add_filter("Wallpaper / Shadertoy ZIP (.zip)", &["zip"])
+            .pick_file()
         {
-            let dest_base = if std::path::Path::new("wallpapers").exists() {
-                std::path::Path::new("wallpapers")
+            // Imported shaders/packs go to %APPDATA%/strata/import (user data).
+            let dest_base = match controller::import_library_dir() {
+                Some(d) => d,
+                None => {
+                    push_toast_import("Import Failed", "Could not resolve the user data directory.", true);
+                    return;
+                }
+            };
+            std::fs::create_dir_all(&dest_base).ok();
+
+            // Route the import: a `.json` (or a `.zip` that isn't a native Strata
+            // pack) is a Shadertoy export and is converted to our manifest+glsl
+            // format; a `.zip` that contains manifest.toml is a native pack.
+            let is_json = path.extension().and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("json")).unwrap_or(false);
+            let is_shadertoy = is_json || !controller::zip_is_native_pack(&path);
+            let import_result = if is_shadertoy {
+                controller::import_shadertoy(&path, &dest_base)
+                    .map(|(p, warnings)| {
+                        for w in &warnings { log::warn!("Shadertoy import note: {}", w); }
+                        p
+                    })
             } else {
-                std::path::Path::new("../../wallpapers")
+                import_wallpaper_zip(&path, &dest_base)
             };
 
-            match import_wallpaper_zip(&path, dest_base) {
+            match import_result {
                 Ok(_) => {
                     let mut state = app_state_import.write().unwrap();
-                    let new_wallpapers = scan_wallpapers(dest_base);
+                    let new_wallpapers = controller::scan_all_wallpapers();
                     state.wallpapers = new_wallpapers.clone();
                     let monitors = state.monitors.clone();
 
@@ -980,8 +1023,10 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
                         let mut item = WallpaperItem::default();
                         item.name = SharedString::from(&w.name);
                         item.author = SharedString::from(&w.author);
+                        item.source_url = SharedString::from(&w.source_url);
                         item.tags = ModelRc::from(Rc::new(VecModel::from(w.tags.iter().map(|t| SharedString::from(t.as_str())).collect::<Vec<_>>())));
                         item.is_parallax = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Parallax"));
+                        item.is_imported = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Imported"));
                         item.visible = true;
                         if let Some(ref thumb) = w.thumbnail {
                             if let Ok(slint_img) = Image::load_from_path(thumb) {
@@ -1000,17 +1045,125 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
                     drop(state);
                     wallpapers_model_import.set_vec(slint_walls);
                     log::info!("Imported wallpaper from {:?}", path.file_name().unwrap());
-                    push_toast_import("Shader Imported", "New shader pack added to your library.", false);
+                    push_toast_import("Shader Imported", "Converted and added to your library.", false);
                     // Generate thumbnails for the (new) wallpapers in the background.
                     spawn_thumbnail_generation(dirs, thumb_tx_import.clone(), thumbnails_busy_import.clone());
                 }
                 Err(e) => {
-                    log::error!("Import error: {}", e);
-                    push_toast_import("Import Failed", "The selected file could not be imported.", true);
+                    log::error!("Import failed: {}", e);
+                    push_toast_import("Import Failed", "Shader couldn't be imported — see logs for details.", true);
                 }
             }
         }
     });
+
+    // Open a shader's original source page (attribution link) in the default
+    // browser. Restricted to http(s) URLs so manifest data can't launch a file
+    // or command via the shell handler.
+    ui.on_open_url(move |url| {
+        let u = url.trim().to_string();
+        if !(u.starts_with("https://") || u.starts_with("http://")) {
+            log::warn!("Refusing to open non-http URL: {:?}", u);
+            return;
+        }
+        if let Err(e) = open::that(&u) {
+            log::warn!("Failed to open URL {}: {}", u, e);
+        }
+    });
+
+    // Check for updates: query the GitHub "latest release" of the Strata repo on a
+    // background thread. If a newer version exists the button turns into "DOWNLOAD
+    // UPDATE" and opens the releases page; otherwise it reports up-to-date. The repo
+    // having no releases yet (404) is treated as "up to date".
+    {
+        let ui_upd = ui.as_weak();
+        ui.on_check_for_updates(move || {
+            let Some(ui) = ui_upd.upgrade() else { return };
+            // Second click while an update is available → open the releases page.
+            if ui.get_update_available() {
+                let url = ui.get_update_url().to_string();
+                if url.starts_with("https://") || url.starts_with("http://") {
+                    if let Err(e) = open::that(&url) { log::warn!("Failed to open releases page: {}", e); }
+                }
+                return;
+            }
+            if ui.get_update_checking() { return; }
+            ui.set_update_checking(true);
+            ui.set_update_button_label("CHECKING…".into());
+            let weak = ui.as_weak();
+            std::thread::spawn(move || {
+                let result = check_github_latest();
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(ui) = weak.upgrade() else { return };
+                    ui.set_update_checking(false);
+                    match result {
+                        Ok(Some((tag, url))) => {
+                            ui.set_update_url(url.into());
+                            ui.set_update_available(true);
+                            ui.set_update_version_badge(slint::format!("{} AVAILABLE", tag));
+                            ui.set_update_button_label("DOWNLOAD UPDATE".into());
+                        }
+                        Ok(None) => {
+                            ui.set_update_version_badge(slint::format!("v{} (LATEST)", env!("CARGO_PKG_VERSION")));
+                            ui.set_update_button_label("CHECK FOR UPDATES".into());
+                        }
+                        Err(e) => {
+                            log::warn!("Update check failed: {}", e);
+                            ui.set_update_version_badge("CHECK FAILED".into());
+                            ui.set_update_button_label("CHECK FOR UPDATES".into());
+                        }
+                    }
+                });
+            });
+        });
+    }
+
+    // Check for Asset-Library (Strata-Library) updates: fetch the official repo's
+    // index.toml and compare its library_version to the installed one. Mirrors the
+    // engine check; "DOWNLOAD UPDATE" opens the library repo page (in-app sync is the
+    // deferred library-decoupling work). Unreachable/unpublished repo = up to date.
+    {
+        let ui_lib = ui.as_weak();
+        ui.on_check_for_library_updates(move || {
+            let Some(ui) = ui_lib.upgrade() else { return };
+            if ui.get_lib_update_available() {
+                let url = ui.get_lib_update_url().to_string();
+                if url.starts_with("https://") || url.starts_with("http://") {
+                    if let Err(e) = open::that(&url) { log::warn!("Failed to open library page: {}", e); }
+                }
+                return;
+            }
+            if ui.get_lib_update_checking() { return; }
+            ui.set_lib_update_checking(true);
+            ui.set_lib_update_button_label("CHECKING…".into());
+            let current = config::Config::load().library_version;
+            let weak = ui.as_weak();
+            std::thread::spawn(move || {
+                let result = check_library_update(&current);
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(ui) = weak.upgrade() else { return };
+                    ui.set_lib_update_checking(false);
+                    match result {
+                        Ok(Some((ver, url))) => {
+                            ui.set_lib_update_url(url.into());
+                            ui.set_lib_update_available(true);
+                            ui.set_lib_update_version_badge(slint::format!("v{} AVAILABLE", ver));
+                            ui.set_lib_update_button_label("DOWNLOAD UPDATE".into());
+                        }
+                        Ok(None) => {
+                            ui.set_lib_update_version_badge(slint::format!("v{} (LATEST)", current));
+                            ui.set_lib_update_button_label("CHECK FOR UPDATES".into());
+                        }
+                        Err(e) => {
+                            log::warn!("Library update check failed: {}", e);
+                            ui.set_lib_update_version_badge("CHECK FAILED".into());
+                            ui.set_lib_update_button_label("CHECK FOR UPDATES".into());
+                        }
+                    }
+                });
+            });
+        });
+    }
 
     // Rescan the wallpaper folder and rebuild the library model (preserving each
     // card's applied-monitor state). Triggered by the Library toolbar refresh.
@@ -1026,13 +1179,8 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
             push_toast_refresh("Refresh In Progress", "Thumbnails are still generating — please wait.", false);
             return;
         }
-        let base = if std::path::Path::new("wallpapers").exists() {
-            std::path::Path::new("wallpapers")
-        } else {
-            std::path::Path::new("../../wallpapers")
-        };
         let mut state = app_state_refresh.write().unwrap();
-        let scanned = scan_wallpapers(base);
+        let scanned = controller::scan_all_wallpapers();
         // Only rebuild the Slint model when the shader SET actually changed (added/
         // removed/renamed or a thumbnail appeared/disappeared). Re-decoding every
         // thumbnail PNG into a fresh GPU texture on each refresh is what made RAM
@@ -1051,8 +1199,10 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
                 let mut item = WallpaperItem::default();
                 item.name = SharedString::from(&w.name);
                 item.author = SharedString::from(&w.author);
+                item.source_url = SharedString::from(&w.source_url);
                 item.tags = ModelRc::from(Rc::new(VecModel::from(w.tags.iter().map(|t| SharedString::from(t.as_str())).collect::<Vec<_>>())));
                 item.is_parallax = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Parallax"));
+                item.is_imported = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Imported"));
                 item.visible = true;
                 if let Some(ref thumb) = w.thumbnail {
                     if let Ok(slint_img) = Image::load_from_path(thumb) {
@@ -1096,14 +1246,10 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
             let path = app_state_del.read().ok()
                 .and_then(|s| s.wallpapers.get(index as usize).map(|w| w.path.clone()));
             let Some(path) = path else { return };
-            // Safety: only delete inside the wallpapers library, never elsewhere.
-            let base = parallax::wallpapers_base();
-            let inside = path.canonicalize().ok()
-                .zip(base.canonicalize().ok())
-                .map(|(p, b)| p.starts_with(&b))
-                .unwrap_or(false);
-            if !inside {
-                log::warn!("Refusing to delete {:?} — outside the wallpaper library", path);
+            // Safety: only delete user-generated content (parallax creations or
+            // imported shaders), never the bundled library or anything elsewhere.
+            if !controller::is_user_deletable(&path) {
+                log::warn!("Refusing to delete {:?} — not a user-generated wallpaper", path);
                 return;
             }
 
@@ -1186,7 +1332,20 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // ── Parallax Studio: choose a depth model ───────────────────────────────
+    // ── Parallax Studio: Automatic-mode quality preset ──────────────────────
+    {
+        let ui_ps = ui.as_weak();
+        let preset_sel = parallax_preset.clone();
+        ui.on_parallax_preset_changed(move |label| {
+            *preset_sel.borrow_mut() = label.to_string();
+            if let Some(ui) = ui_ps.upgrade() {
+                ui.set_parallax_preset_current(label.clone());
+                refresh_parallax_download_state(&ui);
+            }
+        });
+    }
+
+    // ── Parallax Studio: Manual-mode depth model ────────────────────────────
     {
         let ui_mc = ui.as_weak();
         let model_sel = parallax_model.clone();
@@ -1194,62 +1353,12 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
             *model_sel.borrow_mut() = label.to_string();
             if let Some(ui) = ui_mc.upgrade() {
                 ui.set_parallax_model_current(label.clone());
-                refresh_parallax_model_status(&ui, &label);
+                refresh_parallax_download_state(&ui);
             }
         });
     }
 
-    // ── Parallax Studio: download the selected depth model (background) ──────
-    {
-        let ui_dl = ui.as_weak();
-        let model_dl = parallax_model.clone();
-        let downloading = parallax_downloading.clone();
-        let pct = download_pct.clone();
-        let dtx = download_tx.clone();
-        let dl_is_lama = download_is_lama.clone();
-        ui.on_parallax_download_model(move || {
-            let Some(ui) = ui_dl.upgrade() else { return };
-            let label = model_dl.borrow().clone();
-            let Some(choice) = parallax::tier_for_label(&label) else { return };
-            if !parallax::onnx_available() {
-                ui.set_parallax_model_status(SharedString::from("This build can't run models (no ONNX)."));
-                return;
-            }
-            if downloading.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                return;
-            }
-            dl_is_lama.set(false); // route progress text to the model status line
-            ui.set_parallax_downloading(true);
-            pct.store(0, std::sync::atomic::Ordering::SeqCst);
-            let pct_t = pct.clone();
-            let dtx_t = dtx.clone();
-            let downloading_t = downloading.clone();
-            std::thread::Builder::new().name("strata-model-dl".into()).spawn(move || {
-                let res = parallax::download_model(&choice, |done, total| {
-                    let p = if total > 0 { (done * 100 / total) as u32 } else { 0 };
-                    pct_t.store(p, std::sync::atomic::Ordering::SeqCst);
-                }).map(|_| label).map_err(|e| e);
-                downloading_t.store(false, std::sync::atomic::Ordering::SeqCst);
-                let _ = dtx_t.send(res);
-            }).ok();
-        });
-    }
-
-    // ── Parallax Studio: toggle Cinematic (layered) mode ────────────────────
-    {
-        let ui_cin = ui.as_weak();
-        let cinematic = parallax_cinematic.clone();
-        let seg_cin = parallax_seg.clone();
-        ui.on_parallax_cinematic_toggled(move |on| {
-            cinematic.set(on);
-            if let Some(ui) = ui_cin.upgrade() {
-                ui.set_parallax_cinematic(on);
-                if on { refresh_parallax_lama_status(&ui, &seg_cin.borrow()); }
-            }
-        });
-    }
-
-    // ── Parallax Studio: choose the masking (segmentation) model ─────────────
+    // ── Parallax Studio: Manual-mode masking (segmentation) model ────────────
     {
         let ui_seg = ui.as_weak();
         let seg_sel = parallax_seg.clone();
@@ -1257,12 +1366,12 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
             *seg_sel.borrow_mut() = label.to_string();
             if let Some(ui) = ui_seg.upgrade() {
                 ui.set_parallax_seg_current(label.clone());
-                refresh_parallax_lama_status(&ui, &label);
+                refresh_parallax_download_state(&ui);
             }
         });
     }
 
-    // ── Parallax Studio: choose the parallax style (Coherent 3D vs Billboard) ─
+    // ── Parallax Studio: parallax style (Coherent 3D vs Billboard; both modes) ─
     {
         let ui_style = ui.as_weak();
         let style_sel = parallax_style.clone();
@@ -1273,6 +1382,8 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+
+    // ── Parallax Studio: Manual-mode inpaint upscaler ───────────────────────
     {
         let ui_up = ui.as_weak();
         let up_sel = parallax_upscaler.clone();
@@ -1280,42 +1391,69 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
             *up_sel.borrow_mut() = label.to_string();
             if let Some(ui) = ui_up.upgrade() {
                 ui.set_parallax_upscaler_current(label.clone());
+                refresh_parallax_download_state(&ui);
             }
         });
     }
 
-    // ── Parallax Studio: download the LaMa inpainting model (background) ─────
+    // ── Parallax Studio: download ALL models the current selection needs ─────
+    // One queued download (depth + matte + LaMa + upscaler) with a "(i/N)" + name +
+    // size + live %, reported via parallax_dl_text + download_pct → the UI timer.
     {
-        let ui_lama = ui.as_weak();
+        let ui_dl = ui.as_weak();
         let downloading = parallax_downloading.clone();
         let pct = download_pct.clone();
         let dtx = download_tx.clone();
-        let dl_is_lama = download_is_lama.clone();
-        let seg_lama = parallax_seg.clone();
-        ui.on_parallax_download_lama(move || {
-            let Some(ui) = ui_lama.upgrade() else { return };
-            if !parallax::onnx_available() {
-                ui.set_parallax_lama_status(SharedString::from("This build can't run models (no ONNX)."));
-                return;
-            }
-            if downloading.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                return;
-            }
-            dl_is_lama.set(true); // route progress text to the cinematic status line
+        let dl_text = parallax_dl_text.clone();
+        ui.on_parallax_download_models(move || {
+            let Some(ui) = ui_dl.upgrade() else { return };
+            if !parallax::onnx_available() { return; }
+            let missing = parallax::missing_models(&parallax_required_models(&ui));
+            if missing.is_empty() { ui.set_parallax_models_need_download(false); return; }
+            if downloading.swap(true, std::sync::atomic::Ordering::SeqCst) { return; }
             ui.set_parallax_downloading(true);
             pct.store(0, std::sync::atomic::Ordering::SeqCst);
+            if let Ok(mut t) = dl_text.lock() { *t = "Starting download…".to_string(); }
             let pct_t = pct.clone();
             let dtx_t = dtx.clone();
             let downloading_t = downloading.clone();
-            let seg = parallax::seg_choice_for_label(&seg_lama.borrow());
-            std::thread::Builder::new().name("strata-cinematic-dl".into()).spawn(move || {
-                // Cinematic needs the chosen subject matter + LaMa (inpaint).
-                let res = parallax::download_cinematic(&seg, |pct| {
-                    pct_t.store(pct, std::sync::atomic::Ordering::SeqCst);
-                }).map(|_| "inpaint".to_string()).map_err(|e| e);
+            let dl_text_t = dl_text.clone();
+            std::thread::Builder::new().name("strata-models-dl".into()).spawn(move || {
+                let res = parallax::download_models_queue(&missing, |i, total, name, size_mb, p| {
+                    if let Ok(mut t) = dl_text_t.lock() {
+                        *t = format!("{} · {} MB  ({}/{})", name, size_mb, i, total);
+                    }
+                    pct_t.store(p as u32, std::sync::atomic::Ordering::SeqCst);
+                }).map(|_| "models".to_string());
                 downloading_t.store(false, std::sync::atomic::Ordering::SeqCst);
                 let _ = dtx_t.send(res);
             }).ok();
+        });
+    }
+
+    // ── Parallax Studio: Manual tuning sliders (height / zoom / steps) ───────
+    // Update the baked params + arm a debounced live re-bake (timer reuses the cached
+    // depth/inpaint, so tuning is instant — no model inference).
+    {
+        let ui_pc = ui.as_weak();
+        let params_pc = parallax_params.clone();
+        let tune_pc = parallax_tune_settle.clone();
+        ui.on_parallax_param_changed(move |name, value| {
+            let mut p = params_pc.get();
+            match name.as_str() {
+                "height" => p.height = value,
+                "zoom"   => p.zoom = value,
+                "steps"  => p.steps = value.round().max(1.0) as u32,
+                _ => {}
+            }
+            params_pc.set(p);
+            if let Some(ui) = ui_pc.upgrade() {
+                // Mirror back (e.g. steps rounded to an integer) so the value label is exact.
+                ui.set_parallax_param_height(p.height);
+                ui.set_parallax_param_zoom(p.zoom);
+                ui.set_parallax_param_steps(p.steps as f32);
+            }
+            tune_pc.set(Some(std::time::Instant::now()));
         });
     }
 
@@ -1327,7 +1465,7 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
         let preview_ready_render = preview_ready_tx.clone();
         let parallax_model_render = parallax_model.clone();
         let parallax_params_render = parallax_params.clone();
-        let parallax_cinematic_render = parallax_cinematic.clone();
+        let parallax_preset_render = parallax_preset.clone();
         let parallax_progress_render = parallax_progress.clone();
         let parallax_seg_render = parallax_seg.clone();
         let parallax_style_render = parallax_style.clone();
@@ -1342,27 +1480,38 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
                 return; // already working
             }
             ui.set_parallax_busy(true);
-            let cinematic = parallax_cinematic_render.get();
-            ui.set_parallax_status(SharedString::from(if cinematic {
-                "Generating depth, inpainting background…"
-            } else {
-                "Generating depth…"
-            }));
+            ui.set_parallax_status(SharedString::from("Generating depth, inpainting background…"));
             parallax_progress_render.store(0, std::sync::atomic::Ordering::SeqCst);
             ui.set_parallax_progress(0);
 
-            let params = parallax_params_render.get();
-            // Selected model → ModelChoice (None = heuristic). build_preview falls
-            // back to heuristic if the model isn't built-in or isn't downloaded.
-            let model = parallax::tier_for_label(&parallax_model_render.borrow());
-            let seg = parallax::seg_choice_for_label(&parallax_seg_render.borrow());
-            let billboard = parallax::style_is_billboard(&parallax_style_render.borrow());
-            let upscaler = parallax::upscaler_choice_for_label(&parallax_upscaler_render.borrow());
+            // Automatic mode → resolve the chosen preset to its models and use the FIXED
+            // default tuning params, so it's foolproof and identical no matter what the
+            // Manual sliders are set to. Manual mode → the dropdown selections + the tuned
+            // params. Generation is always cinematic.
+            let (model, seg, upscaler, billboard, params) = if ui.get_parallax_mode() == "automatic" {
+                let p = parallax::preset_for_label(&parallax_preset_render.borrow());
+                (
+                    core_engine::depth::model_by_id(&p.depth).cloned(),
+                    core_engine::depth::model_by_id(&p.segment).cloned()
+                        .unwrap_or_else(core_engine::depth::u2net_model),
+                    core_engine::depth::preset_upscaler(p).cloned(),
+                    parallax::style_is_billboard(&parallax_style_render.borrow()),
+                    core_engine::parallax::ParallaxParams::default(),
+                )
+            } else {
+                (
+                    parallax::tier_for_label(&parallax_model_render.borrow()),
+                    parallax::seg_choice_for_label(&parallax_seg_render.borrow()),
+                    parallax::upscaler_choice_for_label(&parallax_upscaler_render.borrow()),
+                    parallax::style_is_billboard(&parallax_style_render.borrow()),
+                    parallax_params_render.get(),
+                )
+            };
             let tx = preview_ready_render.clone();
             let busy = parallax_busy_render.clone();
             let prog = parallax_progress_render.clone();
             std::thread::Builder::new().name("strata-parallax-preview".into()).spawn(move || {
-                let res = parallax::build_preview(&path, &params, model.as_ref(), &seg, cinematic, billboard, upscaler.as_ref(), |p| {
+                let res = parallax::build_preview(&path, &params, model.as_ref(), &seg, true, billboard, upscaler.as_ref(), |p| {
                     prog.store(p, std::sync::atomic::Ordering::SeqCst);
                 });
                 busy.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -1378,7 +1527,7 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
         let parallax_busy_save = parallax_busy.clone();
         let parallax_tx_save = parallax_tx.clone();
         let parallax_params_save = parallax_params.clone();
-        ui.on_parallax_save(move || {
+        ui.on_parallax_save(move |custom_name| {
             let Some(ui) = ui_save.upgrade() else { return };
             let Some(preview) = parallax::preview_dir().filter(|d| d.join("depth.png").exists()) else {
                 ui.set_parallax_status(SharedString::from("Render a preview first."));
@@ -1389,9 +1538,16 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
             }
             ui.set_parallax_busy(true);
             ui.set_parallax_status(SharedString::from("Saving to Library…"));
-            let name = parallax_image_save.borrow().as_ref()
-                .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
-                .unwrap_or_else(|| "Parallax".into());
+            // Use the user's custom name if they typed one; otherwise fall back to
+            // the source image's file name.
+            let typed = custom_name.trim().to_string();
+            let name = if !typed.is_empty() {
+                typed
+            } else {
+                parallax_image_save.borrow().as_ref()
+                    .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
+                    .unwrap_or_else(|| "Parallax".into())
+            };
             let params = parallax_params_save.get();
             let tx = parallax_tx_save.clone();
             let busy = parallax_busy_save.clone();
@@ -1998,6 +2154,8 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
         let auto = auto_launch::AutoLaunchBuilder::new()
             .set_app_name("Strata")
             .set_app_path(&exe_path.to_string_lossy())
+            // Boot into the tray, not the open window.
+            .set_args(&["--minimized"])
             .build()
             .unwrap();
         
@@ -2020,7 +2178,7 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
     let app_state_quit = app_state.clone();
     let target_fps_quit = target_fps.clone();
     let audio_sensitivity_quit = audio_sensitivity.clone();
-    let mouse_enabled_quit = mouse_enabled.clone();
+    let mouse_mode_quit = mouse_mode.clone();
     let mouse_sensitivity_quit = mouse_sensitivity.clone();
     let quality_scale_quit = quality_scale.clone();
     ui.on_quit_requested(move || {
@@ -2028,7 +2186,7 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
         if config_dirty_quit.get() {
             if let Ok(st) = app_state_quit.read() {
                 flush_config(&st, target_fps_quit.load(std::sync::atomic::Ordering::Relaxed), audio_sensitivity_quit.get(),
-                    mouse_enabled_quit.load(std::sync::atomic::Ordering::Relaxed),
+                    u8_to_mouse_mode(mouse_mode_quit.load(std::sync::atomic::Ordering::Relaxed)),
                     f32::from_bits(mouse_sensitivity_quit.load(std::sync::atomic::Ordering::Relaxed)),
                     f32::from_bits(quality_scale_quit.load(std::sync::atomic::Ordering::Relaxed)));
             }
@@ -2082,11 +2240,11 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
         config_dirty_audio.set(true);
     });
 
-    // Mouse interactivity toggle — render loops pick it up live.
-    let mouse_enabled_ui = mouse_enabled.clone();
+    // Mouse interactivity mode — render loops pick it up live.
+    let mouse_mode_ui = mouse_mode.clone();
     let config_dirty_mouse = config_dirty.clone();
-    ui.on_mouse_interactive_toggled(move |on| {
-        mouse_enabled_ui.store(on, std::sync::atomic::Ordering::Relaxed);
+    ui.on_mouse_mode_changed(move |label| {
+        mouse_mode_ui.store(mouse_mode_to_u8(&label), std::sync::atomic::Ordering::Relaxed);
         config_dirty_mouse.set(true);
     });
 
@@ -2191,13 +2349,13 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
     let engine_running = running.clone();
     let engine_context = context.clone();
     let engine_target_fps = target_fps.clone();
-    let engine_mouse_enabled = mouse_enabled.clone();
+    let engine_mouse_mode = mouse_mode.clone();
     let engine_mouse_sensitivity = mouse_sensitivity.clone();
     let engine_quality = quality_scale.clone();
     let telemetry = Arc::new(std::sync::Mutex::new(platform::EngineTelemetry { fps: 0.0, frame_time: 0.0, vram_usage: 0.0 }));
     let telemetry_thread = telemetry.clone();
     std::thread::spawn(move || {
-        platform::renderer::run_renderer(engine_running, engine_state, command_rx, telemetry_thread, engine_context, engine_target_fps, engine_mouse_enabled, engine_mouse_sensitivity, engine_quality);
+        platform::renderer::run_renderer(engine_running, engine_state, command_rx, telemetry_thread, engine_context, engine_target_fps, engine_mouse_mode, engine_mouse_sensitivity, engine_quality);
     });
 
     // ── Initial wallpaper window creation ───────────────────────────────────
@@ -2210,9 +2368,53 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
         wallpaper_store.clone(),
     );
 
+    // Weekly background update check (engine + asset library). Runs at most ~once a
+    // week so launches stay fast and offline-friendly. On finding an update it sets
+    // the Settings → Updates badges/buttons and raises `update_toast_pending`; the UI
+    // timer shows the "Updates available" toast once the window is actually visible
+    // (so a tray/minimized start still surfaces it when the user opens the UI).
+    let update_toast_pending = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64).unwrap_or(0);
+        let cfg = config::Config::load();
+        const WEEK: i64 = 7 * 24 * 60 * 60;
+        if now - cfg.last_update_check >= WEEK {
+            let weak = ui.as_weak();
+            let lib_ver = cfg.library_version.clone();
+            let pending = update_toast_pending.clone();
+            std::thread::spawn(move || {
+                let app = check_github_latest();
+                let lib = check_library_update(&lib_ver);
+                // Record the check time regardless of outcome.
+                { let mut c = config::Config::load(); c.last_update_check = now; c.save().ok(); }
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(ui) = weak.upgrade() else { return };
+                    let mut any = false;
+                    if let Ok(Some((tag, url))) = app {
+                        ui.set_update_url(url.into());
+                        ui.set_update_available(true);
+                        ui.set_update_version_badge(slint::format!("{} AVAILABLE", tag));
+                        ui.set_update_button_label("DOWNLOAD UPDATE".into());
+                        any = true;
+                    }
+                    if let Ok(Some((ver, url))) = lib {
+                        ui.set_lib_update_url(url.into());
+                        ui.set_lib_update_available(true);
+                        ui.set_lib_update_version_badge(slint::format!("v{} AVAILABLE", ver));
+                        ui.set_lib_update_button_label("DOWNLOAD UPDATE".into());
+                        any = true;
+                    }
+                    if any { pending.store(true, std::sync::atomic::Ordering::Relaxed); }
+                });
+            });
+        }
+    }
+
     // ── Diagnostics / telemetry / log / tray timer ─────────────────────────
     let ui_handle_timer = ui.as_weak();
     let telemetry_ui = telemetry.clone();
+    let update_toast_pending_timer = update_toast_pending.clone();
     let timer = slint::Timer::default();
     let logs_model = Rc::new(VecModel::<LogEntry>::from(Vec::new()));
     ui.set_logs(ModelRc::from(logs_model.clone()));
@@ -2220,7 +2422,7 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
     let config_dirty_timer = config_dirty.clone();
     let app_state_timer = app_state.clone();
     let target_fps_timer = target_fps.clone();
-    let mouse_enabled_timer = mouse_enabled.clone();
+    let mouse_mode_timer = mouse_mode.clone();
     let mouse_sensitivity_timer = mouse_sensitivity.clone();
     let context_timer = context.clone();
     let thumbnails_busy_timer = thumbnails_busy.clone();
@@ -2269,7 +2471,10 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
     let audio_sensitivity_timer = audio_sensitivity.clone();
     let quality_scale_timer = quality_scale.clone();
     let preview_state_timer = preview_state.clone();
-    let parallax_seg_timer = parallax_seg.clone();
+    let parallax_params_timer = parallax_params.clone();
+    let parallax_tune_settle_timer = parallax_tune_settle.clone();
+    // Throttle for the periodic "needs download?" recheck on the Parallax tab.
+    let parallax_dl_recheck = std::cell::Cell::new(std::time::Instant::now());
 
     // Copy the diagnostics log to the clipboard.
     let logs_model_copy = logs_model.clone();
@@ -2300,6 +2505,16 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
     log::set_max_level(log::LevelFilter::Info);
 
     timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(100), move || {
+        // ── "Updates available" toast ──
+        // The weekly check sets this flag from a background thread; show the toast
+        // only once the window is actually visible, so a minimized/tray start still
+        // greets the user with it when they open the UI.
+        if ui_visible_timer.get()
+            && update_toast_pending_timer.swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            push_toast_timer("Updates Available", "Open Settings \u{2192} Updates to get the latest.", false);
+        }
+
         // ── GPU device-loss recovery ──
         // A lost device (driver TDR/reset, GPU hang, driver update) can't be
         // revived in place. Persist state and relaunch — Strata restores monitors,
@@ -2313,7 +2528,7 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
                     &st,
                     target_fps_timer.load(std::sync::atomic::Ordering::Relaxed),
                     audio_sensitivity_timer.get(),
-                    mouse_enabled_timer.load(std::sync::atomic::Ordering::Relaxed),
+                    u8_to_mouse_mode(mouse_mode_timer.load(std::sync::atomic::Ordering::Relaxed)),
                     f32::from_bits(mouse_sensitivity_timer.load(std::sync::atomic::Ordering::Relaxed)),
                     f32::from_bits(quality_scale_timer.load(std::sync::atomic::Ordering::Relaxed)),
                 );
@@ -2359,7 +2574,7 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
         if config_dirty_timer.get() {
             if let Ok(st) = app_state_timer.read() {
                 flush_config(&st, target_fps_timer.load(std::sync::atomic::Ordering::Relaxed), audio_sensitivity_timer.get(),
-                    mouse_enabled_timer.load(std::sync::atomic::Ordering::Relaxed),
+                    u8_to_mouse_mode(mouse_mode_timer.load(std::sync::atomic::Ordering::Relaxed)),
                     f32::from_bits(mouse_sensitivity_timer.load(std::sync::atomic::Ordering::Relaxed)),
                     f32::from_bits(quality_scale_timer.load(std::sync::atomic::Ordering::Relaxed)));
             }
@@ -2451,36 +2666,62 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // ── Parallax model / LaMa download: progress + completion ──
-        // `download_is_lama` routes the live "Downloading…%" text to the right
-        // status line (depth model vs LaMa), since they share the download channel.
+        // ── Parallax model download queue: live progress + completion ──
+        // The download thread writes "Name · NN MB (i/N)" into parallax_dl_text and the
+        // current-file % into download_pct; mirror both to the UI while downloading.
         if parallax_downloading.load(std::sync::atomic::Ordering::SeqCst) {
             if let Some(ui) = ui_handle_timer.upgrade() {
                 ui.set_parallax_downloading(true);
-                let txt = SharedString::from(format!("Downloading… {}%", download_pct.load(std::sync::atomic::Ordering::SeqCst)));
-                if download_is_lama.get() { ui.set_parallax_lama_status(txt); } else { ui.set_parallax_model_status(txt); }
+                if let Ok(t) = parallax_dl_text.lock() {
+                    ui.set_parallax_download_text(SharedString::from(t.as_str()));
+                }
+                ui.set_parallax_download_percent(download_pct.load(std::sync::atomic::Ordering::SeqCst) as i32);
             }
         }
         while let Ok(res) = download_rx.try_recv() {
             if let Some(ui) = ui_handle_timer.upgrade() {
                 ui.set_parallax_downloading(false);
                 match res {
-                    Ok(label) if label == "inpaint" => {
-                        refresh_parallax_lama_status(&ui, &parallax_seg_timer.borrow());
-                        push_toast_timer("Models Ready", "Cinematic models downloaded — ready to render.", false);
-                    }
-                    Ok(label) => {
-                        refresh_parallax_model_status(&ui, &label);
-                        push_toast_timer("Model Ready", "Depth model downloaded — ready to generate.", false);
+                    Ok(_) => {
+                        refresh_parallax_download_state(&ui); // recompute → hides the button
+                        push_toast_timer("Models Ready", "All required models downloaded — ready to generate.", false);
                     }
                     Err(e) => {
                         log::error!("Model download failed: {}", e);
-                        if download_is_lama.get() {
-                            ui.set_parallax_lama_status(SharedString::from("Download failed — see Diagnostics."));
-                        } else {
-                            ui.set_parallax_model_status(SharedString::from("Download failed — see Diagnostics."));
+                        ui.set_parallax_download_text(SharedString::from("Download failed — see Diagnostics."));
+                        push_toast_timer("Download Failed", "Could not download the models.", true);
+                    }
+                }
+            }
+        }
+        // Keep the "needs download?" flag fresh on the Parallax tab (mode/preset/selection
+        // can change without a callback, e.g. switching Automatic↔Manual). Cheap fs checks,
+        // throttled to ~1/s.
+        if parallax_dl_recheck.get().elapsed() >= std::time::Duration::from_millis(1000) {
+            parallax_dl_recheck.set(std::time::Instant::now());
+            if let Some(ui) = ui_handle_timer.upgrade() {
+                if ui.get_active_tab() == "parallax"
+                    && !parallax_downloading.load(std::sync::atomic::Ordering::SeqCst) {
+                    refresh_parallax_download_state(&ui);
+                }
+            }
+        }
+
+        // Live re-bake: ~180ms after the tuning sliders settle, re-bake the preview's
+        // shader with the new params (reusing the cached depth/inpaint via style.toml) and
+        // reload the preview renderer — instant tuning with NO model inference.
+        if let Some(t) = parallax_tune_settle_timer.get() {
+            if t.elapsed() >= std::time::Duration::from_millis(180) {
+                parallax_tune_settle_timer.set(None);
+                if let Some(dir) = parallax::preview_dir() {
+                    if preview_state_timer.borrow().is_some() && dir.join("style.toml").exists() {
+                        match core_engine::parallax::rebake_layered(&dir, &parallax_params_timer.get()) {
+                            Ok(()) => match ParallaxPreviewState::new(context_timer.clone(), &dir) {
+                                Ok(state) => *preview_state_timer.borrow_mut() = Some(state),
+                                Err(e) => log::warn!("parallax tuning reload failed: {e}"),
+                            },
+                            Err(e) => log::warn!("parallax re-bake failed: {e}"),
                         }
-                        push_toast_timer("Download Failed", "Could not download the model.", true);
                     }
                 }
             }
@@ -2697,6 +2938,7 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
         let ui_visible_evt = ui_visible.clone();
         let move_settle_evt = move_settle.clone();
         let ui_maximized_evt = ui_maximized.clone();
+        let needs_repaint_evt = needs_repaint.clone();
         ui.window().on_winit_window_event(move |win, event| {
             // NOTE: this fires for EVERY event (incl. high-frequency CursorMoved), so do
             // only cheap flag-setting here — never per-event syscalls.
@@ -2714,11 +2956,24 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 WindowEvent::Occluded(occluded) => {
                     // `Occluded(true)` = minimized/fully hidden; `(false)` = visible again.
-                    // Slint's own backend already forces a full repaint on un-occlude
-                    // (renderer.occluded() → NewBuffer + a redraw), so we must NOT add our
-                    // own resize nudge here — that only causes the restore flicker. We just
-                    // track visibility (to pause the parallax preview while hidden).
                     ui_visible_evt.set(!occluded);
+                    if !occluded {
+                        // Un-minimize/un-hide: request_redraw alone often leaves the
+                        // software UI transparent-but-stale (Slint's partial renderer
+                        // only repaints dirty regions, and a click/hover then paints
+                        // piecemeal). Flag a full-repaint nudge (timer resizes ±2px →
+                        // softbuffer reallocates → guaranteed full repaint).
+                        win.request_redraw();
+                        needs_repaint_evt.set(true);
+                    }
+                }
+                WindowEvent::Focused(true) => {
+                    // Windows often does NOT emit Occluded for a taskbar minimize, so a
+                    // window restored from the taskbar can come back blank/transparent.
+                    // Regaining focus is the reliable signal for that restore — force the
+                    // same full-repaint nudge (skipped when maximized, so no shift).
+                    win.request_redraw();
+                    needs_repaint_evt.set(true);
                 }
                 WindowEvent::Moved(_) => {
                     // Debounced in the timer — a move can reveal stale (unpainted) regions.
@@ -2751,8 +3006,106 @@ fn run_ui_mode() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     log::info!("UI ready — running Slint event loop.");
-    ui.run()?;
+    // Use run_event_loop_until_quit (NOT ui.run()) so Strata behaves like a tray
+    // app: the loop survives the last window closing. Pressing X on the main window
+    // hides it to the tray (see on_close_requested); the process only ends via the
+    // UI Quit button or the tray Quit item (both call std::process::exit). Without
+    // this, hiding the window when NO wallpaper windows exist would quit the loop.
+    // `--minimized` (used by the autostart entry): start hidden in the tray so a
+    // PC boot doesn't pop the window open. Wallpapers still render on the desktop;
+    // the user opens the UI from the tray when they want it. Otherwise show normally.
+    if start_minimized {
+        log::info!("Starting minimized to tray (--minimized).");
+        ui_visible.set(false);
+        #[cfg(target_os = "windows")]
+        {
+            hidden_to_tray.set(true);
+            let _ = tray_toggle_item.set_text("Show Strata");
+        }
+        // Don't call ui.show() — the loop below stays alive without any window.
+    } else {
+        ui.show()?;
+    }
+    slint::run_event_loop_until_quit()?;
+    ui.hide().ok();
     Ok(())
+}
+
+/// Query GitHub for the Strata repo's latest published release. Returns
+/// `Ok(Some((tag, html_url)))` if it's newer than the running build, `Ok(None)`
+/// if up to date or no release exists yet (404), or `Err` on a network/parse
+/// failure. Runs synchronously — call it off the UI thread.
+fn check_github_latest() -> Result<Option<(String, String)>, String> {
+    let resp = ureq::get("https://api.github.com/repos/BadassBaboon/Strata/releases/latest")
+        .set("User-Agent", "Strata-Updater")
+        .set("Accept", "application/vnd.github+json")
+        .timeout(std::time::Duration::from_secs(10))
+        .call();
+    match resp {
+        Ok(r) => {
+            // Parse the body ourselves (no dependency on ureq's optional json feature).
+            let body = r.into_string().map_err(|e| e.to_string())?;
+            let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+            let tag = json.get("tag_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let url = json.get("html_url").and_then(|v| v.as_str())
+                .unwrap_or("https://github.com/BadassBaboon/Strata/releases").to_string();
+            if !tag.is_empty() && is_newer_version(&tag, env!("CARGO_PKG_VERSION")) {
+                Ok(Some((tag, url)))
+            } else {
+                Ok(None)
+            }
+        }
+        // No releases published yet → not an error, just "up to date".
+        Err(ureq::Error::Status(404, _)) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Check the official content repository for a newer asset-library version: fetch
+/// `<repo>/index.toml` and read its `library_version`. Returns `Ok(Some((version,
+/// repo_page_url)))` if newer than `current`, else `Ok(None)`. Run off the UI thread.
+fn check_library_update(current: &str) -> Result<Option<(String, String)>, String> {
+    let base = controller::official_repo_url().ok_or("no content repository configured")?;
+    let url = format!("{}/index.toml", base.trim_end_matches('/'));
+    match ureq::get(&url).set("User-Agent", "Strata-Updater").timeout(std::time::Duration::from_secs(10)).call() {
+        Ok(r) => {
+            let body = r.into_string().map_err(|e| e.to_string())?;
+            let remote = body.lines().find_map(|l| {
+                let l = l.trim();
+                l.strip_prefix("library_version")
+                    .and_then(|r| r.trim_start().strip_prefix('='))
+                    .map(|v| v.trim().trim_matches('"').to_string())
+            }).ok_or("index.toml has no library_version")?;
+            if is_newer_version(&remote, current) {
+                Ok(Some((remote, library_page_url(&base))))
+            } else {
+                Ok(None)
+            }
+        }
+        Err(ureq::Error::Status(404, _)) => Ok(None), // repo/tag not published yet
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Derive the human GitHub page from a jsDelivr `gh/<owner>/<repo>@<tag>` base URL.
+fn library_page_url(cdn: &str) -> String {
+    if let Some(rest) = cdn.split("/gh/").nth(1) {
+        let path = rest.split('@').next().unwrap_or(rest).trim_end_matches('/');
+        return format!("https://github.com/{}", path);
+    }
+    "https://github.com/BadassBaboon/Strata-Library".to_string()
+}
+
+/// Parse a `vMAJOR.MINOR.PATCH`(-ish) string into a comparable tuple.
+fn parse_semver(s: &str) -> (u32, u32, u32) {
+    let s = s.trim().trim_start_matches(['v', 'V']);
+    let mut it = s.split(['.', '-', '+', ' ']).filter_map(|p| p.parse::<u32>().ok());
+    (it.next().unwrap_or(0), it.next().unwrap_or(0), it.next().unwrap_or(0))
+}
+
+/// True if release `tag` is a newer version than the running `current`.
+fn is_newer_version(tag: &str, current: &str) -> bool {
+    parse_semver(tag) > parse_semver(current)
 }
 
 /// Persist the full config from current app state + FPS cap. Used by the
@@ -2798,9 +3151,9 @@ fn spawn_thumbnail_generation(
     busy: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     use std::sync::atomic::Ordering;
-    // Only generate for ones actually missing a cached thumbnail.
+    // Only generate for folders that don't already have an in-folder thumbnail.png.
     let missing: Vec<std::path::PathBuf> = wallpaper_dirs.into_iter()
-        .filter(|d| controller::cached_thumbnail_path(d).map(|p| !p.exists()).unwrap_or(false))
+        .filter(|d| !controller::thumbnail_path(d).exists())
         .collect();
     if missing.is_empty() {
         return;
@@ -2812,9 +3165,6 @@ fn spawn_thumbnail_generation(
     let busy_guard = busy.clone();
     let spawned = std::thread::Builder::new().name("strata-thumbnails".into()).spawn(move || {
         log::info!("Generating {} missing thumbnail(s)…", missing.len());
-        if let Some(dir) = controller::thumbnails_dir() {
-            let _ = std::fs::create_dir_all(&dir);
-        }
         // Drive each headless GPU context on a tiny single-threaded runtime.
         let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
             Ok(rt) => rt,
@@ -2840,21 +3190,20 @@ fn spawn_thumbnail_generation(
                 }
             }
             let Some(ctx) = ctx.as_ref() else { break };
-            if let Some(out) = controller::cached_thumbnail_path(wp) {
-                // Parallax packages (image.png + depth.png) thumbnail straight from the
-                // user's source photo — no shader render — so the library shows the
-                // actual picture, and it's cheaper than a GPU pass.
-                let src = wp.join("image.png");
-                let result = if src.exists() && wp.join("depth.png").exists() {
-                    thumbnail_from_source(&src, &out, 480, 270)
-                } else {
-                    core_engine::thumbnail::generate_thumbnail(ctx.clone(), wp, &out, 480, 270)
-                        .map_err(|e| e.to_string())
-                };
-                match result {
-                    Ok(()) => { let _ = tx.send((wp.clone(), out)); }
-                    Err(e) => log::warn!("Thumbnail failed for {:?}: {}", wp.file_name().unwrap_or_default(), e),
-                }
+            let out = controller::thumbnail_path(wp);
+            // Parallax packages (image.png + depth.png) thumbnail straight from the
+            // user's source photo — no shader render — so the library shows the
+            // actual picture, and it's cheaper than a GPU pass.
+            let src = wp.join("image.png");
+            let result = if src.exists() && wp.join("depth.png").exists() {
+                thumbnail_from_source(&src, &out, 480, 270)
+            } else {
+                core_engine::thumbnail::generate_thumbnail(ctx.clone(), wp, &out, 480, 270)
+                    .map_err(|e| e.to_string())
+            };
+            match result {
+                Ok(()) => { let _ = tx.send((wp.clone(), out)); }
+                Err(e) => log::warn!("Thumbnail failed for {:?}: {}", wp.file_name().unwrap_or_default(), e),
             }
             // Throttle: a gentle background task — keeps CPU low and lets the GPU
             // serve the live wallpapers between shaders.
@@ -2874,39 +3223,64 @@ fn spawn_thumbnail_generation(
     }
 }
 
-/// Update the Parallax Studio model status line + Download-button visibility for
-/// the currently chosen dropdown label.
-fn refresh_parallax_model_status(ui: &AppWindow, label: &str) {
-    match parallax::tier_for_label(label) {
-        Some(choice) => {
-            let (status, need) = parallax::model_status(&choice);
-            ui.set_parallax_model_status(SharedString::from(status));
-            ui.set_parallax_model_need_download(need);
-        }
-        None => {
-            ui.set_parallax_model_status(SharedString::from(""));
-            ui.set_parallax_model_need_download(false);
-        }
+/// The models the CURRENT Parallax selection needs (always cinematic). Automatic mode →
+/// the chosen preset's bundle; Manual mode → the individual dropdown selections. Read
+/// straight from the UI's `*_current` properties so it reflects live state.
+fn parallax_required_models(ui: &AppWindow) -> Vec<core_engine::depth::ModelChoice> {
+    if ui.get_parallax_mode() == "automatic" {
+        let p = parallax::preset_for_label(&ui.get_parallax_preset_current());
+        parallax::preset_required_models(p)
+    } else {
+        let mut v = Vec::new();
+        if let Some(m) = parallax::tier_for_label(&ui.get_parallax_model_current()) { v.push(m); }
+        v.push(parallax::seg_choice_for_label(&ui.get_parallax_seg_current()));
+        v.push(core_engine::depth::lama_model());
+        if let Some(u) = parallax::upscaler_choice_for_label(&ui.get_parallax_upscaler_current()) { v.push(u); }
+        v
     }
 }
 
-/// Update the Cinematic models status line (chosen matter + LaMa) + Download-button.
-fn refresh_parallax_lama_status(ui: &AppWindow, seg_label: &str) {
-    let seg = parallax::seg_choice_for_label(seg_label);
-    let (status, need) = parallax::cinematic_status(&seg);
-    ui.set_parallax_lama_status(SharedString::from(status));
-    ui.set_parallax_lama_need_download(need);
+/// Recompute whether the current selection has any un-downloaded models and update the
+/// "Download required models" button visibility.
+fn refresh_parallax_download_state(ui: &AppWindow) {
+    if !parallax::onnx_available() {
+        ui.set_parallax_models_need_download(false);
+        return;
+    }
+    let missing = parallax::missing_models(&parallax_required_models(ui));
+    ui.set_parallax_models_need_download(!missing.is_empty());
 }
 
-fn flush_config(state: &AppState, target_fps: u32, audio_sensitivity: f32, mouse_interactive: bool, mouse_sensitivity: f32, quality_scale: f32) {
+fn flush_config(state: &AppState, target_fps: u32, audio_sensitivity: f32, mouse_mode: &str, mouse_sensitivity: f32, quality_scale: f32) {
     let mut config = config::Config::load();
     config.update_from_state(state.theme_mode.clone(), state.span_monitors, state.autostart, &state.monitors);
     config.target_fps = target_fps;
     config.audio_sensitivity = audio_sensitivity;
-    config.mouse_interactive = mouse_interactive;
+    config.mouse_mode = mouse_mode.to_string();
     config.mouse_sensitivity = mouse_sensitivity;
     config.shader_quality = scale_to_shader_quality(quality_scale).to_string();
     config.save().ok();
+}
+
+/// Mouse-interactivity mode label → engine code (0=Off, 1=All, 2=Only shaders,
+/// 3=Only Parallax). Unknown labels default to Only Parallax.
+fn mouse_mode_to_u8(label: &str) -> u8 {
+    match label {
+        "Off" => 0,
+        "On (Everything)" => 1,
+        "On (Only Shaders)" => 2,
+        _ => 3, // "On (Only Parallax Studio)"
+    }
+}
+
+/// Inverse of `mouse_mode_to_u8`, for persisting the mode label to config.
+fn u8_to_mouse_mode(mode: u8) -> &'static str {
+    match mode {
+        0 => "Off",
+        1 => "On (Everything)",
+        2 => "On (Only Shaders)",
+        _ => "On (Only Parallax Studio)",
+    }
 }
 
 /// Map a Shader Quality preset label (from the Settings dropdown) to a global
@@ -2978,4 +3352,9 @@ struct Args {
     /// Enable verbose logging
     #[arg(long, alias = "logs")]
     logs: bool,
+
+    /// Start hidden in the system tray (used by the autostart entry so booting
+    /// the PC doesn't pop the window open).
+    #[arg(long)]
+    minimized: bool,
 }

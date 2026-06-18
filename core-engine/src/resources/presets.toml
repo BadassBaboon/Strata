@@ -1,0 +1,71 @@
+# Strata — Parallax Studio quality presets.
+#
+# Each preset is a named bundle of model choices for the Automatic-mode Parallax
+# pipeline (always Cinematic / layered). `depth`, `segment`, `upscale` reference an
+# `id` from models.toml (`upscale = "off"` disables the inpaint upscaler). Embedded at
+# build time (include_str!) and parsed at runtime, so this can later be swapped for a
+# freshly-fetched copy from the external Strata-Library repo (community-submitted
+# presets via PR) without recompiling — same idea as models.toml.
+#
+# `ram` / `cpu` are human-readable guidance shown in the UI (NOT enforced). They were
+# profiled on the hardware in [meta.profiled_on]; treat them as ballpark — actual usage
+# scales with the user's CPU/GPU/RAM and DirectML driver.
+
+schema_version = 1
+
+[meta]
+# Shown as the Automatic-mode pro-tip. Keep it short.
+profiled_on = "Ryzen 9 9950X3D (16C/32T) + 48 GB RAM, DirectML GPU acceleration"
+protip = "Fast and Fast Sharp presets work perfectly fine for almost every Parallax wallpaper generation. Only use higher-quality presets if you have a powerful PC with more than 12 GB of RAM."
+
+# ── Presets (ordered light → heavy; "Fast Sharp" is a crisp light variant) ─────
+
+[[preset]]
+id = "low"
+name = "Fast"
+depth = "da2-small"
+segment = "u2net"
+upscale = "off"
+blurb = "Fastest, lightest. Good depth on modest hardware; no inpaint sharpening."
+ram = "~800 MB peak"
+cpu = "6–12%"
+
+[[preset]]
+id = "low-sharp"
+name = "Fast Sharp"
+depth = "da2-small"
+segment = "birefnet-lite"
+upscale = "remacri-x4"
+blurb = "Light depth + a sharp Remacri-upscaled fill and a cleaner matte. Crisp on a light machine."
+ram = "~1.3 GB peak"
+cpu = "6–12%"
+
+[[preset]]
+id = "medium"
+name = "Balanced"
+depth = "da2-base"
+segment = "u2net"
+upscale = "realesr-general-x4v3"
+blurb = "Balanced depth with a gentle, natural inpaint upscaler. The everyday default."
+ram = "~850 MB peak"
+cpu = "8–16%"
+
+[[preset]]
+id = "high"
+name = "Quality"
+depth = "da2-large"
+segment = "birefnet-lite"
+upscale = "realesrgan-x4"
+blurb = "Strong depth, sharp inpaint detail, and a refined matte. Wants a capable GPU."
+ram = "~2.5 GB (brief spikes to ~6 GB)"
+cpu = "15–25%, settles ~5%"
+
+[[preset]]
+id = "ultra"
+name = "Max"
+depth = "da3-large"
+segment = "birefnet"
+upscale = "remacri-x4"
+blurb = "Best depth (Depth Anything V3 Large), highest-quality matte, balanced Remacri detail."
+ram = "~2 GB peak"
+cpu = "26–32%, settles below 5%"

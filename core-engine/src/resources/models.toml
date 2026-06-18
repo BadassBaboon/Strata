@@ -55,6 +55,21 @@ files = [
 ]
 
 [[depth]]
+id = "da3-large"
+name = "Depth Anything V3 Large (1.38 GB · Apache)"
+license = "Apache-2.0"
+commercial_ok = true
+size_mb = 1380
+input_size = 518
+invert = false
+arch = "v3"
+tier = "large"
+files = [
+  { name = "model.onnx",      url = "https://huggingface.co/onnx-community/depth-anything-v3-large/resolve/main/onnx/model.onnx?download=true" },
+  { name = "model.onnx_data", url = "https://huggingface.co/onnx-community/depth-anything-v3-large/resolve/main/onnx/model.onnx_data?download=true" },
+]
+
+[[depth]]
 id = "da2-small"
 name = "Depth Anything V2 Small · int8 (28 MB · Apache)"
 license = "Apache-2.0"
@@ -148,11 +163,44 @@ files = [
 
 [[upscale]]
 id = "realesrgan-x4"
-name = "Real-ESRGAN x4 (inpaint detail, 64 MB)"
+name = "Real-ESRGAN x4 (sharpest detail, 64 MB)"
 license = "BSD-3-Clause"
 commercial_ok = true
 size_mb = 64
 input_size = 128   # fixed 128→512 tile; the fill is upscaled in 128-px tiles
 files = [
   { name = "model.onnx", url = "https://huggingface.co/qualcomm/Real-ESRGAN-x4plus/resolve/01179a4da7bf5ac91faca650e6afbf282ac93933/Real-ESRGAN-x4plus.onnx?download=true" },
+]
+
+# realesr-general-x4v3 — a tiny SRVGG-compact net (same Real-ESRGAN family). Much
+# lighter than the RRDB x4plus above and noticeably GENTLER (more natural texture,
+# far less over-sharpening), so inpainted background fills don't look unnaturally
+# crisp under heavy parallax. Same 128→512 (×4) fixed tile, so it's a drop-in for
+# upscale_4x. Hosted by Qualcomm AI Hub (pinned commit); weights are BSD-3 Real-ESRGAN.
+[[upscale]]
+id = "realesr-general-x4v3"
+name = "Real-ESRGAN General x4v3 (softer + lighter, 5 MB)"
+license = "BSD-3-Clause"
+commercial_ok = true
+size_mb = 5
+input_size = 128
+files = [
+  { name = "model.onnx", url = "https://huggingface.co/qualcomm/Real-ESRGAN-General-x4v3/resolve/3fd2853badb4d1c4661559674f54a7d574aadc9f/Real-ESRGAN-General-x4v3.onnx?download=true" },
+]
+
+# 4x Remacri — ESRGAN/RRDB, the quality MIDDLE GROUND between the harsh x4plus and the
+# soft General-x4v3. Verified drop-in: dynamic input, single RGB image (3-ch NCHW), ×4;
+# RRDB's local receptive field tiles seam-free at our 128px tile like x4plus does.
+# LICENSE CAVEAT: unclear / likely CC-BY-NC-SA, murky provenance (community reupload) —
+# kept during development and flagged non-commercial. This is exactly the kind of model
+# that should move to the planned external Strata-Library repo (see [[library-decoupling]]).
+[[upscale]]
+id = "remacri-x4"
+name = "4x Remacri (balanced detail, 68 MB · non-commercial)"
+license = "CC-BY-NC-SA-4.0 (unverified)"
+commercial_ok = false
+size_mb = 68
+input_size = 128
+files = [
+  { name = "model.onnx", url = "https://huggingface.co/yuvraj108c/ComfyUI-Upscaler-Onnx/resolve/main/4x_foolhardy_Remacri.onnx?download=true" },
 ]

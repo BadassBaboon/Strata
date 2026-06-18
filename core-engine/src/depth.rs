@@ -241,6 +241,13 @@ impl DepthEstimator for OnnxEstimator {
             .map_err(|e| format!("ort session builder: {e}"))?
             .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level1)
             .map_err(|e| format!("ort optimization level: {e}"))?
+            // Disable memory-pattern pre-planning: it reserves a working buffer sized to
+            // the run and keeps the allocator's high-water mark up. We run each model once
+            // then drop the session, so we want the memory back — not retained (fixes the
+            // "RAM stuck high after generating with several models" leak). Inputs are
+            // fixed-size, so there's no perf benefit to memory patterns here anyway.
+            .with_memory_pattern(false)
+            .map_err(|e| format!("ort memory pattern: {e}"))?
             .commit_from_file(&self.model_path)
             .map_err(|e| format!("load model {:?}: {e}", self.model_path))?;
 
@@ -397,6 +404,64 @@ pub fn upscale_models() -> &'static [ModelChoice] { &registry().upscale }
 pub fn model_by_id(id: &str) -> Option<&'static ModelChoice> {
     let r = registry();
     r.depth.iter().chain(&r.segment).chain(&r.inpaint).chain(&r.upscale).find(|m| m.id == id)
+}
+
+// ── Quality presets (Automatic mode) ────────────────────────────────────────────
+
+/// A Parallax-Studio quality preset: a named bundle of model ids. `upscale == "off"`
+/// (or empty) means no inpaint upscaler. `ram`/`cpu`/`blurb` are UI guidance only.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Preset {
+    pub id: String,
+    pub name: String,
+    pub depth: String,
+    pub segment: String,
+    #[serde(default)]
+    pub upscale: String,
+    #[serde(default)]
+    pub blurb: String,
+    #[serde(default)]
+    pub ram: String,
+    #[serde(default)]
+    pub cpu: String,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct PresetMeta {
+    #[serde(default)]
+    pub profiled_on: String,
+    #[serde(default)]
+    pub protip: String,
+}
+
+#[derive(serde::Deserialize)]
+struct PresetRegistry {
+    #[serde(default)]
+    meta: PresetMeta,
+    #[serde(default)]
+    preset: Vec<Preset>,
+}
+
+fn preset_registry() -> &'static PresetRegistry {
+    use std::sync::OnceLock;
+    static REG: OnceLock<PresetRegistry> = OnceLock::new();
+    REG.get_or_init(|| {
+        toml::from_str(include_str!("resources/presets.toml"))
+            .expect("embedded presets.toml is valid")
+    })
+}
+
+/// All quality presets, in dropdown order.
+pub fn presets() -> &'static [Preset] { &preset_registry().preset }
+/// Automatic-mode pro-tip + profiling-hardware note.
+pub fn preset_meta() -> &'static PresetMeta { &preset_registry().meta }
+/// Look up a preset by id.
+pub fn preset_by_id(id: &str) -> Option<&'static Preset> {
+    preset_registry().preset.iter().find(|p| p.id == id)
+}
+/// Resolve a preset's `upscale` field to a model (None when "off"/empty/unknown).
+pub fn preset_upscaler(p: &Preset) -> Option<&'static ModelChoice> {
+    if p.upscale.is_empty() || p.upscale == "off" { None } else { model_by_id(&p.upscale) }
 }
 
 /// The LaMa inpainting model (Cinematic/layered background fill).

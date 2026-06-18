@@ -15,6 +15,10 @@ pub struct WallpaperInfo {
     pub name: String,
     pub author: String,
     pub version: String,
+    /// Original source page (e.g. the Shadertoy shader URL), for attribution.
+    /// Empty when unknown.
+    #[serde(default)]
+    pub source_url: String,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
@@ -115,6 +119,7 @@ impl WallpaperConfig {
                         name,
                         author: "Unknown".to_string(),
                         version: "1.0.0".to_string(),
+                        source_url: String::new(),
                         tags: Vec::new(),
                         passes: vec!["image".to_string()],
                     },

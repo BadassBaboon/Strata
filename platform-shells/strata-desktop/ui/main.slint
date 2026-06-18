@@ -111,6 +111,7 @@ export global MonColors {
 export struct WallpaperItem {
     name:          string,
     author:        string,
+    source-url:    string,   // original page (e.g. Shadertoy); empty if unknown
     tags:          [string],
     visible:       bool,
     has-thumbnail: bool,
@@ -119,6 +120,7 @@ export struct WallpaperItem {
     is-selected:   bool,
     is-active:     bool,   // applied to at least one monitor
     is-parallax:   bool,   // shader vs parallax asset (badge)
+    is-imported:   bool,   // imported from a Shadertoy export (red badge + delete)
 }
 
 export struct LayerItem {
@@ -286,6 +288,35 @@ component AccentSlider inherits Rectangle {
 
 // â"€â"€ Settings building blocks â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
+// Single-line text input styled to match the app (blue focus accent), instead of
+// the std-widgets LineEdit whose accent (pink) can't be retinted via Palette.
+component BlueInput inherits Rectangle {
+    in property <string> placeholder;
+    in-out property <string> text <=> ti.text;
+    height: 44px; border-radius: 10px;
+    background: Theme.is-dark ? #ffffff0c : #00000008;
+    border-width: 1.5px;
+    border-color: ti.has-focus ? Theme.palette.accent : Theme.palette.border;
+    forward-focus: ti;
+    animate border-color { duration: 120ms; }
+    HorizontalLayout {
+        padding-left: 12px; padding-right: 12px;
+        ti := TextInput {
+            vertical-alignment: center;
+            color: Theme.palette.text;
+            font-size: 14px;
+            single-line: true;
+            selection-background-color: Theme.palette.accent;
+        }
+    }
+    if ti.text == "" : Text {
+        x: 12px; height: 100%; vertical-alignment: center;
+        text: root.placeholder;
+        color: Theme.palette.text-muted;
+        font-size: 14px;
+    }
+}
+
 // Uppercase tracked section heading with an accent icon (matches the prototype).
 component SectionLabel inherits HorizontalLayout {
     in property <string> text;
@@ -421,7 +452,18 @@ component AppearanceSettings inherits VerticalLayout {
 
 component IntegrationsSettings inherits VerticalLayout {
     spacing: 16px;
-    SectionLabel { icon: "puzzle"; text: "INTEGRATIONS"; }
+    HorizontalLayout {
+        spacing: 8px;
+        SectionLabel { icon: "puzzle"; text: "INTEGRATIONS"; horizontal-stretch: 1; }
+        // UPCOMING — integrations are planned, hence the panel is greyed/disabled.
+        Rectangle {
+            height: 20px; width: int-up.preferred-width + 18px; border-radius: 6px;
+            background: Theme.palette.card-hover;
+            y: (parent.height - self.height) / 2;
+            int-up := Text { text: "UPCOMING"; color: Theme.palette.text-muted; font-size: 9px; font-weight: 800;
+                             letter-spacing: 2px; horizontal-alignment: center; vertical-alignment: center; }
+        }
+    }
     SettingsPanel {
         disabled: true;
         VerticalLayout {
@@ -569,10 +611,10 @@ component SystemControlSettings inherits VerticalLayout {
 // Audio + mouse interactivity controls, grouped into one section.
 component InteractivitySettings inherits VerticalLayout {
     in property <float> audio-sensitivity;
-    in property <bool>  mouse-interactive;
+    in property <string> mouse-mode;   // Off | On (Everything) | On (Only Shaders) | On (Only Parallax Studio)
     in property <float> mouse-sensitivity;
     callback audio-sensitivity-changed(float);
-    callback mouse-interactive-toggled(bool);
+    callback mouse-mode-changed(string);
     callback mouse-sensitivity-changed(float);
 
     spacing: 16px;
@@ -610,20 +652,27 @@ component InteractivitySettings inherits VerticalLayout {
             }
         }
         Divider {}
-        // ── Mouse Interactivity toggle ──
+        // ── Mouse Interactivity mode ──
         HorizontalLayout {
             spacing: 16px;
             VerticalLayout {
                 horizontal-stretch: 1; spacing: 4px;
                 Text { text: "Mouse Interactivity"; font-size: 15px; font-weight: 700; color: Theme.palette.text; }
-                Text { text: "Feed the desktop cursor into interactive shaders (e.g. 1D Radial Lightmap)."; font-size: 12px; color: Theme.palette.text-muted; wrap: word-wrap; }
+                Text { text: "Which wallpapers follow the cursor. Parallax Studio wallpapers drift on their own when not interactive."; font-size: 12px; color: Theme.palette.text-muted; wrap: word-wrap; }
             }
-            VerticalLayout { alignment: center; Toggle { checked: root.mouse-interactive; toggled(v) => { root.mouse-interactive-toggled(v); } } }
+            VerticalLayout {
+                alignment: center; min-width: 200px;
+                Select {
+                    options: ["Off", "On (Everything)", "On (Only Shaders)", "On (Only Parallax Studio)"];
+                    current: root.mouse-mode;
+                    selected(v) => { root.mouse-mode-changed(v); }
+                }
+            }
         }
-        // ── Mouse Sensitivity (only relevant when enabled) ──
+        // ── Mouse Sensitivity (only relevant when not Off) ──
         VerticalLayout {
             spacing: 12px;
-            opacity: root.mouse-interactive ? 1.0 : 0.45;
+            opacity: root.mouse-mode != "Off" ? 1.0 : 0.45;
             HorizontalLayout {
                 spacing: 8px;
                 HorizontalLayout {
@@ -637,7 +686,7 @@ component InteractivitySettings inherits VerticalLayout {
                     border-width: 1px; border-color: Theme.palette.border;
                     mrst-txt := Text { text: "Reset"; color: Theme.palette.text-muted; font-size: 10px; font-weight: 800;
                                       horizontal-alignment: center; vertical-alignment: center; }
-                    mrst-ta := TouchArea { clicked => { if (root.mouse-interactive) { root.mouse-sensitivity-changed(1.0); } } }
+                    mrst-ta := TouchArea { clicked => { if (root.mouse-mode != "Off") { root.mouse-sensitivity-changed(1.0); } } }
                 }
                 Rectangle {
                     height: 22px; width: ms-b.preferred-width + 18px; border-radius: 6px;
@@ -648,7 +697,7 @@ component InteractivitySettings inherits VerticalLayout {
             }
             AccentSlider {
                 minimum: 10; maximum: 400; value: root.mouse-sensitivity * 100;
-                changed(v) => { if (root.mouse-interactive) { root.mouse-sensitivity-changed(v / 100); } }
+                changed(v) => { if (root.mouse-mode != "Off") { root.mouse-sensitivity-changed(v / 100); } }
             }
         }
     }
@@ -656,35 +705,63 @@ component InteractivitySettings inherits VerticalLayout {
 
 component UpdatesSettings inherits VerticalLayout {
     spacing: 16px;
+    // Driven from Rust: the engine-version badge text, the action-button label
+    // ("CHECK FOR UPDATES" / "CHECKING…" / "DOWNLOAD UPDATE"), whether a newer
+    // release was found (changes the accent), and a busy flag. `update-clicked`
+    // is handled in Rust (it either runs the check or opens the releases page).
+    in property <string> version-badge: "v1.0.0 (LATEST)";
+    in property <string> update-button-label: "CHECK FOR UPDATES";
+    in property <bool> update-available;
+    in property <bool> update-checking;
+    callback update-clicked();
+    // Asset Library (Strata-Library) — mirrors the engine row.
+    in property <string> lib-version-badge: "v1.0.0 (LATEST)";
+    in property <string> lib-update-button-label: "CHECK FOR UPDATES";
+    in property <bool> lib-update-available;
+    in property <bool> lib-update-checking;
+    callback lib-update-clicked();
     SectionLabel { icon: "arrow-up-circle"; text: "UPDATES"; }
     SettingsPanel {
-        disabled: true;
         HorizontalLayout {
             spacing: 8px;
             Text { text: "Strata Engine"; font-size: 15px; font-weight: 700; color: Theme.palette.text; vertical-alignment: center; horizontal-stretch: 1; }
             Rectangle {
                 height: 20px; width: ver-b.preferred-width + 16px; border-radius: 6px;
-                background: Theme.palette.selection.with-alpha(0.12);
-                ver-b := Text { text: "v1.0.0 (LATEST)"; color: Theme.palette.selection; font-size: 9px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                background: (root.update-available ? Theme.palette.accent : Theme.palette.selection).with-alpha(0.12);
+                ver-b := Text { text: root.version-badge; color: root.update-available ? Theme.palette.accent : Theme.palette.selection; font-size: 9px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
             }
         }
         Rectangle {
-            height: 48px; border-radius: 12px; border-width: 1px; border-color: Theme.palette.border;
-            Text { text: "CHECK FOR UPDATES"; color: Theme.palette.text; font-size: 11px; font-weight: 800; letter-spacing: 1px; horizontal-alignment: center; vertical-alignment: center; }
+            height: 48px; border-radius: 12px; border-width: 1px;
+            border-color: root.update-available ? Theme.palette.accent.with-alpha(0.5) : Theme.palette.border;
+            background: root.update-available
+                ? Theme.palette.accent.with-alpha(upd-ta.has-hover ? 0.18 : 0.10)
+                : (upd-ta.has-hover ? Theme.palette.text.with-alpha(0.05) : transparent);
+            opacity: root.update-checking ? 0.5 : 1.0;
+            animate background { duration: 150ms; }
+            Text { text: root.update-button-label; color: root.update-available ? Theme.palette.accent : Theme.palette.text; font-size: 11px; font-weight: 800; letter-spacing: 1px; horizontal-alignment: center; vertical-alignment: center; }
+            upd-ta := TouchArea { clicked => { if (!root.update-checking) { root.update-clicked(); } } mouse-cursor: root.update-checking ? default : pointer; }
         }
         Divider {}
         HorizontalLayout {
             spacing: 8px;
             Text { text: "Asset Library"; font-size: 15px; font-weight: 700; color: Theme.palette.text; vertical-alignment: center; horizontal-stretch: 1; }
-            HorizontalLayout {
-                spacing: 4px; alignment: end;
-                Icon { name: "info"; size: 12px; color: Theme.palette.text-muted; y: (parent.height - self.height)/2; }
-                Text { text: "Last synced: 2m ago"; color: Theme.palette.text-muted; font-size: 10px; font-weight: 700; vertical-alignment: center; }
+            Rectangle {
+                height: 20px; width: lib-b.preferred-width + 16px; border-radius: 6px;
+                background: (root.lib-update-available ? Theme.palette.accent : Theme.palette.selection).with-alpha(0.12);
+                lib-b := Text { text: root.lib-version-badge; color: root.lib-update-available ? Theme.palette.accent : Theme.palette.selection; font-size: 9px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
             }
         }
         Rectangle {
-            height: 48px; border-radius: 12px; border-width: 1px; border-color: Theme.palette.border;
-            Text { text: "SYNC LIVE LIBRARY"; color: Theme.palette.text; font-size: 11px; font-weight: 800; letter-spacing: 1px; horizontal-alignment: center; vertical-alignment: center; }
+            height: 48px; border-radius: 12px; border-width: 1px;
+            border-color: root.lib-update-available ? Theme.palette.accent.with-alpha(0.5) : Theme.palette.border;
+            background: root.lib-update-available
+                ? Theme.palette.accent.with-alpha(lib-ta.has-hover ? 0.18 : 0.10)
+                : (lib-ta.has-hover ? Theme.palette.text.with-alpha(0.05) : transparent);
+            opacity: root.lib-update-checking ? 0.5 : 1.0;
+            animate background { duration: 150ms; }
+            Text { text: root.lib-update-button-label; color: root.lib-update-available ? Theme.palette.accent : Theme.palette.text; font-size: 11px; font-weight: 800; letter-spacing: 1px; horizontal-alignment: center; vertical-alignment: center; }
+            lib-ta := TouchArea { clicked => { if (!root.lib-update-checking) { root.lib-update-clicked(); } } mouse-cursor: root.lib-update-checking ? default : pointer; }
         }
     }
 }
@@ -1218,15 +1295,20 @@ component LayerStack inherits VerticalLayout {
 
     if root.scrollable : ScrollView {
         vertical-stretch: 1;
-        LayerList {
-            layers: root.layers;
-            move-up(i) => { root.move-up(i); }
-            move-down(i) => { root.move-down(i); }
-            remove(i) => { root.remove(i); }
-            opacity-changed(i, o) => { root.opacity-changed(i, o); }
-            blend-changed(i, b) => { root.blend-changed(i, b); }
-            visibility-toggled(i, v) => { root.visibility-toggled(i, v); }
-            edit-requested(i) => { root.edit-requested(i); }
+        // Inline width-constrained wrapper (reserves the scrollbar gutter + lets the
+        // ScrollView size the content) — same pattern the other tabs use.
+        VerticalLayout {
+            width: root.width - 26px;
+            LayerList {
+                layers: root.layers;
+                move-up(i) => { root.move-up(i); }
+                move-down(i) => { root.move-down(i); }
+                remove(i) => { root.remove(i); }
+                opacity-changed(i, o) => { root.opacity-changed(i, o); }
+                blend-changed(i, b) => { root.blend-changed(i, b); }
+                visibility-toggled(i, v) => { root.visibility-toggled(i, v); }
+                edit-requested(i) => { root.edit-requested(i); }
+            }
         }
     }
     if !root.scrollable : LayerList {
@@ -1251,8 +1333,11 @@ component WallpaperCard inherits Rectangle {
     in property <[MonitorItem]> monitors;
     in property <bool>    is-active;
     in property <bool>    is-parallax;
+    in property <bool>    is-imported;
+    in property <string>  source-url;
     callback toggle-monitor(int);
     callback delete-requested();
+    callback open-url(string);
 
     // Use each monitor's actual color tag (set in the Compositor) so the Library
     // avatars / "Apply to" rows match the colors shown in the spatial canvas.
@@ -1328,8 +1413,9 @@ component WallpaperCard inherits Rectangle {
             HorizontalLayout {
                 x: parent.width - self.preferred-width - 12px; y: 12px; spacing: 6px;
 
-                // Delete — only for Parallax Studio creations (user-generated).
-                if is-parallax : Rectangle {
+                // Delete — for user-generated cards: Parallax Studio creations and
+                // imported Shadertoy shaders.
+                if is-parallax || is-imported : Rectangle {
                     width: 32px; height: 32px; border-radius: 10px;
                     background: del-ta.has-hover ? Theme.palette.danger : #00000066;
                     border-width: 1px; border-color: #ffffff1a;
@@ -1339,14 +1425,15 @@ component WallpaperCard inherits Rectangle {
                     del-ta := TouchArea { clicked => { root.delete-requested(); } mouse-cursor: pointer; }
                 }
 
-                // Asset-type badge: blue "parallax" mark, or the shader zap.
+                // Asset-type badge: blue sparkles for Parallax, the shader "zap"
+                // otherwise — tinted RED when the shader was imported from Shadertoy.
                 Rectangle {
                     width: 32px; height: 32px; border-radius: 10px;
-                    background: is-parallax ? #3b82f633 : #00000066;
-                    border-width: 1px; border-color: is-parallax ? #3b82f6aa : #ffffff1a;
+                    background: is-parallax ? #3b82f633 : (is-imported ? #ef444433 : #00000066);
+                    border-width: 1px; border-color: is-parallax ? #3b82f6aa : (is-imported ? #ef4444aa : #ffffff1a);
                     Icon {
                         name: is-parallax ? "sparkles" : "zap"; size: 16px;
-                        color: is-parallax ? #3b82f6 : Theme.palette.selection;
+                        color: is-parallax ? #3b82f6 : (is-imported ? #ef4444 : Theme.palette.selection);
                         x: (parent.width - self.width)/2; y: (parent.height - self.height)/2;
                     }
                 }
@@ -1365,6 +1452,32 @@ component WallpaperCard inherits Rectangle {
                     font-weight: 700; font-size: 17px;
                     color: Theme.palette.text;
                     overflow: elide;
+                }
+                // Attribution: "Made by <author>". When a source URL is known the
+                // author is rendered as an accent-colored hyperlink that opens the
+                // original page (satisfies Shadertoy's credit clause).
+                if root.author != "" : HorizontalLayout {
+                    spacing: 4px; alignment: start;
+                    Text {
+                        text: "Made by";
+                        color: Theme.palette.text-muted;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
+                    author-txt := Text {
+                        text: root.author;
+                        color: root.source-url != ""
+                            ? (link-ta.has-hover ? Theme.palette.selection.brighter(0.2) : Theme.palette.selection)
+                            : Theme.palette.text-muted;
+                        font-size: 12px; font-weight: 600;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        link-ta := TouchArea {
+                            enabled: root.source-url != "";
+                            mouse-cursor: pointer;
+                            clicked => { root.open-url(root.source-url); }
+                        }
+                    }
                 }
                 // Tag chips: rounded "#tag" pills (clipped to one row).
                 // Always present at a fixed height so every card is the SAME
@@ -1504,6 +1617,7 @@ component KineSlider inherits VerticalLayout {
     in property <float> minimum: 0;
     in property <float> maximum: 1;
     in-out property <float> value: 0;
+    callback changed(float);
     spacing: 10px;
     HorizontalLayout {
         spacing: 8px;
@@ -1524,7 +1638,12 @@ component KineSlider inherits VerticalLayout {
     }
     AccentSlider {
         minimum: root.minimum; maximum: root.maximum; value: root.value;
-        changed(v) => { root.value = v; }
+        // NOTE: do NOT self-assign `root.value = v` here — that overwrites the
+        // parent's `value: …` binding, so later external updates (e.g. the Reset
+        // button setting params back to defaults) would no longer move the slider.
+        // The owner updates `value` via the round-trip in `changed`, keeping the
+        // binding intact so both drags and resets reflect.
+        changed(v) => { root.changed(v); }
     }
 }
 
@@ -1556,30 +1675,38 @@ component PillButton inherits Rectangle {
 component ParallaxControls inherits VerticalLayout {
     in-out property <string> mode: "automatic";
     in property <string> image-name;     // selected photo (empty = none yet)
-    // Depth model selection + download state.
-    in property <[string]> model-options;
+    // Automatic mode: one Quality Preset bundles depth + matte + upscaler choices.
+    in property <[string]> preset-options;
+    in property <string> preset-current;
+    in property <string> protip;          // automatic-mode guidance (from preset meta)
+    // Manual mode: individual model dropdowns.
+    in property <[string]> model-options;   // depth estimator
     in property <string> model-current;
-    in property <string> model-status;       // "" hides the status row
-    in property <bool>   model-need-download; // show the Download button
-    in property <bool>   downloading;
-    in property <bool>   cinematic;            // layered (LDI) mode
-    in property <string> lama-status;
-    in property <bool>   lama-need-download;
-    in property <[string]> seg-options;        // masking-model dropdown
+    in property <[string]> seg-options;     // masking model
     in property <string> seg-current;
-    in property <[string]> style-options;      // parallax-style dropdown
-    in property <string> style-current;
-    in property <[string]> upscaler-options;    // inpaint-detail upscaler
+    in property <[string]> upscaler-options; // inpaint-detail upscaler
     in property <string> upscaler-current;
+    // Parallax style (shown in both modes).
+    in property <[string]> style-options;
+    in property <string> style-current;
+    // Unified model-download state (depth + matte + LaMa + upscaler for the selection).
+    in property <bool>   models-need-download; // any required model missing
+    in property <bool>   downloading;
+    in property <string> download-text;        // e.g. "Depth Anything V2 Base · 195 MB (1/3)"
+    in property <int>    download-percent;      // 0..100 of the current file
+    // Manual-mode tuning knobs (baked into the shader; re-baked live on change).
+    in property <float>  param-height;          // parallax strength
+    in property <float>  param-zoom;            // zoom / edge cover
+    in property <float>  param-steps;           // refinement quality
     callback open-image();
     callback auto-detect();
+    callback preset-changed(string);
     callback model-changed(string);
-    callback download-model();
-    callback cinematic-toggled(bool);
-    callback download-lama();
     callback seg-changed(string);
     callback style-changed(string);
     callback upscaler-changed(string);
+    callback download-models();
+    callback param-changed(string, float);
     spacing: 24px;
 
     // Section 1 — Asset pipeline
@@ -1611,7 +1738,7 @@ component ParallaxControls inherits VerticalLayout {
                 }
                 dz-ta := TouchArea { clicked => { root.open-image(); } mouse-cursor: pointer; }
             }
-            // Settings mode
+            // Settings mode (Automatic = preset-driven, foolproof; Manual = pick models)
             VerticalLayout {
                 spacing: 8px;
                 Text { text: "SETTINGS"; font-size: 10px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
@@ -1621,115 +1748,122 @@ component ParallaxControls inherits VerticalLayout {
                     selected(v) => { root.mode = v == "Manual Mode" ? "manual" : "automatic"; }
                 }
             }
-            // Depth estimator model + on-demand download
-            VerticalLayout {
+
+            // ── AUTOMATIC — one Quality Preset bundles depth + matte + upscaler ──
+            if root.mode == "automatic" : VerticalLayout {
                 spacing: 8px;
-                Text { text: "DEPTH ESTIMATOR MODEL"; font-size: 10px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
-                Select {
-                    options: root.model-options;
-                    current: root.model-current;
-                    selected(v) => { root.model-changed(v); }
-                }
-                if root.model-status != "" : HorizontalLayout {
-                    spacing: 8px;
-                    Text { text: root.model-status; font-size: 10px; color: Theme.palette.text-muted;
-                           vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-                    if root.model-need-download && !root.downloading : Rectangle {
-                        height: 28px; width: dl-t.preferred-width + 24px; border-radius: 8px;
-                        background: dl-ta.has-hover ? Theme.palette.accent.with-alpha(0.2) : Theme.palette.accent.with-alpha(0.1);
-                        border-width: 1px; border-color: Theme.palette.accent.with-alpha(0.25);
-                        dl-t := Text { text: "DOWNLOAD"; color: Theme.palette.accent; font-size: 10px; font-weight: 800;
-                               letter-spacing: 1px; x: 12px; y: (parent.height - self.height)/2; }
-                        dl-ta := TouchArea { clicked => { root.download-model(); } mouse-cursor: pointer; }
-                    }
+                Text { text: "QUALITY PRESET"; font-size: 10px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
+                Select { options: root.preset-options; current: root.preset-current; selected(v) => { root.preset-changed(v); } }
+            }
+            if root.mode == "automatic" : VerticalLayout {
+                spacing: 8px;
+                Text { text: "PARALLAX STYLE"; font-size: 10px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
+                Select { options: root.style-options; current: root.style-current; selected(v) => { root.style-changed(v); } }
+            }
+            if root.mode == "automatic" && root.protip != "" : Rectangle {
+                border-radius: 12px;
+                background: Theme.palette.accent.with-alpha(0.06);
+                border-width: 1px; border-color: Theme.palette.accent.with-alpha(0.18);
+                HorizontalLayout {
+                    padding: 12px; spacing: 10px;
+                    Icon { name: "sparkles"; size: 14px; color: Theme.palette.accent; }
+                    Text { text: root.protip; font-size: 11px; color: Theme.palette.text-muted; wrap: word-wrap; horizontal-stretch: 1; }
                 }
             }
-            // Upscaler — restores detail to the Cinematic background inpaint.
-            VerticalLayout {
+
+            // ── MANUAL — individual model dropdowns ──
+            if root.mode == "manual" : VerticalLayout {
+                spacing: 8px;
+                Text { text: "DEPTH ESTIMATOR MODEL"; font-size: 10px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
+                Select { options: root.model-options; current: root.model-current; selected(v) => { root.model-changed(v); } }
+            }
+            if root.mode == "manual" : VerticalLayout {
+                spacing: 8px;
+                Text { text: "MASKING MODEL"; font-size: 10px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
+                Select { options: root.seg-options; current: root.seg-current; selected(v) => { root.seg-changed(v); } }
+            }
+            if root.mode == "manual" : VerticalLayout {
                 spacing: 8px;
                 Text { text: "UPSCALER (INPAINT DETAIL)"; font-size: 10px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
                 Select { options: root.upscaler-options; current: root.upscaler-current; selected(v) => { root.upscaler-changed(v); } }
             }
-            // Cinematic (layered) mode — inpaints the background to kill edge smear.
-            VerticalLayout {
+            if root.mode == "manual" : VerticalLayout {
                 spacing: 8px;
-                HorizontalLayout {
-                    spacing: 8px;
-                    VerticalLayout {
-                        horizontal-stretch: 1; spacing: 2px;
-                        Text { text: "CINEMATIC (LAYERED)"; font-size: 10px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
-                        Text { text: "Inpaints background — removes edge smear"; font-size: 9px; color: Theme.palette.text-muted; }
+                Text { text: "PARALLAX STYLE"; font-size: 10px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
+                Select { options: root.style-options; current: root.style-current; selected(v) => { root.style-changed(v); } }
+            }
+
+            // ── Unified model download (both modes) ──
+            // Shown whenever the current selection needs models. One queued download with
+            // a "(i/N)" + per-model name & size + live progress (see download-text/percent).
+            if root.models-need-download || root.downloading : VerticalLayout {
+                spacing: 8px;
+                if !root.downloading : Rectangle {
+                    height: 40px; border-radius: 10px;
+                    background: dlq-ta.has-hover ? Theme.palette.accent.with-alpha(0.2) : Theme.palette.accent.with-alpha(0.1);
+                    border-width: 1px; border-color: Theme.palette.accent.with-alpha(0.25);
+                    HorizontalLayout {
+                        alignment: center; spacing: 8px;
+                        Icon { name: "arrow-up-circle"; size: 15px; color: Theme.palette.accent; y: (parent.height - self.height)/2; }
+                        Text { text: "DOWNLOAD REQUIRED MODELS"; color: Theme.palette.accent; font-size: 11px; font-weight: 800;
+                               letter-spacing: 1px; vertical-alignment: center; }
                     }
-                    VerticalLayout { alignment: center; Toggle { checked: root.cinematic; toggled(v) => { root.cinematic-toggled(v); } } }
+                    dlq-ta := TouchArea { clicked => { root.download-models(); } mouse-cursor: pointer; }
                 }
-                if root.cinematic : VerticalLayout {
-                    spacing: 4px;
-                    Text { text: "MASKING MODEL"; font-size: 9px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
-                    Select {
-                        options: root.seg-options;
-                        current: root.seg-current;
-                        selected(v) => { root.seg-changed(v); }
-                    }
-                }
-                if root.cinematic : VerticalLayout {
-                    spacing: 4px;
-                    Text { text: "PARALLAX STYLE"; font-size: 9px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
-                    Select {
-                        options: root.style-options;
-                        current: root.style-current;
-                        selected(v) => { root.style-changed(v); }
-                    }
-                }
-                if root.cinematic && root.lama-status != "" : HorizontalLayout {
-                    spacing: 8px;
-                    Text { text: root.lama-status; font-size: 10px; color: Theme.palette.text-muted;
-                           vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-                    if root.lama-need-download && !root.downloading : Rectangle {
-                        height: 28px; width: lama-t.preferred-width + 24px; border-radius: 8px;
-                        background: lama-ta.has-hover ? Theme.palette.accent.with-alpha(0.2) : Theme.palette.accent.with-alpha(0.1);
-                        border-width: 1px; border-color: Theme.palette.accent.with-alpha(0.25);
-                        lama-t := Text { text: "DOWNLOAD"; color: Theme.palette.accent; font-size: 10px; font-weight: 800;
-                               letter-spacing: 1px; x: 12px; y: (parent.height - self.height)/2; }
-                        lama-ta := TouchArea { clicked => { root.download-lama(); } mouse-cursor: pointer; }
+                if root.downloading : VerticalLayout {
+                    spacing: 6px;
+                    Text { text: root.download-text; font-size: 10px; font-weight: 700; color: Theme.palette.text; overflow: elide; }
+                    Rectangle {
+                        height: 6px; border-radius: 3px; background: Theme.is-dark ? #ffffff14 : #00000010;
+                        Rectangle {
+                            x: 0; y: 0; height: 100%;
+                            width: parent.width * (root.download-percent / 100.0);
+                            border-radius: 3px; background: Theme.palette.accent;
+                        }
                     }
                 }
             }
         }
     }
 
-    // Section 2/3/4 — Manual kinematics, or the Automatic card.
+    // Manual tuning — purpose-built knobs for our depth-parallax shader. They bake into
+    // the wallpaper's shader; the sliders re-bake it LIVE (reusing the cached depth +
+    // inpaint), so changes preview instantly without re-running the models.
     if root.mode == "manual" : VerticalLayout {
-        spacing: 24px;
-        VerticalLayout {
-            spacing: 14px;
-            SectionLabel { icon: "settings-2"; text: "CORE KINEMATICS"; }
-            SettingsPanel {
-                KineSlider { label: "HEIGHT SCALE (Z-AXIS)"; value: 0; }
-                HorizontalLayout {
-                    spacing: 16px;
-                    KineSlider { horizontal-stretch: 1; label: "OFFSET X"; muted: true; value: 0; }
-                    KineSlider { horizontal-stretch: 1; label: "OFFSET Y"; muted: true; value: 0; }
+        spacing: 14px;
+        HorizontalLayout {
+            spacing: 8px;
+            SectionLabel { icon: "settings-2"; text: "PARALLAX TUNING"; horizontal-stretch: 1; }
+            // Reset all three tuning sliders to their defaults (matches the
+            // Settings audio/mouse-sensitivity reset affordance).
+            Rectangle {
+                height: 22px; width: ptrst-txt.preferred-width + 16px; border-radius: 6px;
+                background: ptrst-ta.has-hover ? Theme.palette.card-hover : Theme.palette.card;
+                border-width: 1px; border-color: Theme.palette.border;
+                y: (parent.height - self.height) / 2;
+                ptrst-txt := Text { text: "Reset"; color: Theme.palette.text-muted; font-size: 10px; font-weight: 800;
+                                    horizontal-alignment: center; vertical-alignment: center; }
+                ptrst-ta := TouchArea {
+                    clicked => {
+                        root.param-changed("height", 0.2);
+                        root.param-changed("zoom", 1.06);
+                        root.param-changed("steps", 10);
+                    }
                 }
             }
         }
-        VerticalLayout {
-            spacing: 14px;
-            SectionLabel { icon: "camera"; text: "PROJECTION & OPTICS"; }
-            SettingsPanel {
-                KineSlider { label: "ISOMETRIC BIAS"; value: 0.5; }
-                KineSlider { label: "OPTIC ZOOM"; muted: true; minimum: 0.5; maximum: 2.0; value: 1.0; }
+        SettingsPanel {
+            KineSlider {
+                label: "PARALLAX STRENGTH"; minimum: 0.0; maximum: 0.30; value: root.param-height;
+                changed(v) => { root.param-changed("height", v); }
             }
-        }
-        VerticalLayout {
-            spacing: 14px;
-            SectionLabel { icon: "sparkles"; text: "POST-PROCESSING"; }
-            SettingsPanel {
-                Text { text: "DEPTH OF FIELD"; font-size: 11px; font-weight: 800; letter-spacing: 1px; color: Theme.palette.accent; }
-                HorizontalLayout {
-                    spacing: 16px;
-                    KineSlider { horizontal-stretch: 1; label: "BLUR RADIUS"; muted: true; value: 0; }
-                    KineSlider { horizontal-stretch: 1; label: "FOCAL DEPTH"; muted: true; value: 0; }
-                }
+            KineSlider {
+                label: "ZOOM (EDGE COVER)"; minimum: 1.0; maximum: 1.30; value: root.param-zoom;
+                changed(v) => { root.param-changed("zoom", v); }
+            }
+            KineSlider {
+                label: "QUALITY (STEPS)"; muted: true; minimum: 8.0; maximum: 64.0; value: root.param-steps;
+                changed(v) => { root.param-changed("steps", v); }
             }
         }
     }
@@ -1747,11 +1881,21 @@ component ParallaxControls inherits VerticalLayout {
             }
             Text { text: "AUTOMATIC SETTINGS"; font-size: 12px; font-weight: 800; letter-spacing: 2px;
                    color: Theme.palette.text; horizontal-alignment: center; }
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 20px; width: ad-up.preferred-width + 18px; border-radius: 6px;
+                    background: Theme.palette.card-hover;
+                    ad-up := Text { text: "UPCOMING"; color: Theme.palette.text-muted; font-size: 9px; font-weight: 800;
+                                    letter-spacing: 2px; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
             Text {
-                text: "Enable the inference engine to automatically analyze spatial depth and compute optimal kinematic coordinates.";
+                text: "Planned: detect your PC's hardware and pick the optimal quality preset automatically. Not available yet — choose a Quality Preset manually for now.";
                 font-size: 11px; color: Theme.palette.text-muted; horizontal-alignment: center; wrap: word-wrap;
             }
-            PillButton { text: "AUTO-DETECT"; icon: "sparkles"; clicked => { root.auto-detect(); } }
+            // Disabled until spec-based auto-preset selection ships (see UPCOMING above).
+            PillButton { text: "AUTO-DETECT"; icon: "sparkles"; enabled: false; clicked => { root.auto-detect(); } }
         }
     }
 }
@@ -1863,7 +2007,7 @@ component ParallaxPreview inherits VerticalLayout {
 }
 
 component ParallaxStudio inherits Rectangle {
-    property <string> mode: "automatic";
+    in-out property <string> mode: "automatic";
     // Side-by-side on wide windows; stacked + scrolling when narrow (like the
     // Compositor/Settings tabs) so nothing clips off the right on small windows.
     property <bool> wide: self.width >= 1000px;
@@ -1871,33 +2015,39 @@ component ParallaxStudio inherits Rectangle {
     in property <bool> busy;           // depth generation / export in progress
     in property <string> status;       // shown in the previewer's timeline strip
     in property <int> progress;        // 0..100 for the timeline bar
+    in property <[string]> preset-options;
+    in property <string> preset-current;
+    in property <string> protip;
     in property <[string]> model-options;
     in property <string> model-current;
-    in property <string> model-status;
-    in property <bool> model-need-download;
-    in property <bool> downloading;
-    in property <bool> cinematic;
-    in property <string> lama-status;
-    in property <bool> lama-need-download;
     in property <[string]> seg-options;
     in property <string> seg-current;
-    in property <[string]> style-options;
-    in property <string> style-current;
     in property <[string]> upscaler-options;
     in property <string> upscaler-current;
+    in property <[string]> style-options;
+    in property <string> style-current;
+    in property <bool> models-need-download;
+    in property <bool> downloading;
+    in property <string> download-text;
+    in property <int> download-percent;
+    in property <float> param-height;
+    in property <float> param-zoom;
+    in property <float> param-steps;
     in property <image> preview-image;
     in property <bool> has-preview;
     callback open-image();
     callback auto-detect();
     callback render-requested();
-    callback save-requested();
+    callback save-requested(string);   // the chosen library name ("" = use image file name)
+    // Toggles the "name your wallpaper" dialog overlay (opened by SAVE TO LIBRARY).
+    property <bool> show-name-dialog: false;
+    callback preset-changed(string);
     callback model-changed(string);
-    callback download-model();
-    callback cinematic-toggled(bool);
-    callback download-lama();
     callback seg-changed(string);
     callback style-changed(string);
     callback upscaler-changed(string);
+    callback download-models();
+    callback param-changed(string, float);
 
     // Render button label + a status line, shared by both layouts.
     property <string> render-label: root.busy ? "WORKING…" : (root.has-preview ? "RE-RENDER" : "RENDER");
@@ -1908,44 +2058,61 @@ component ParallaxStudio inherits Rectangle {
     if root.wide : HorizontalLayout {
         spacing: 24px;
         Rectangle {
-            width: 400px;
+            // Sidebar widened so the cards keep their full width AND there's a
+            // 34px scrollbar gutter (422 − 388), matching the Compositor's inset —
+            // the preview just takes the remaining width. The render/save buttons
+            // span the full sidebar (full-width actions, by design).
+            width: 422px;
             VerticalLayout {
                 spacing: 16px;
                 ScrollView {
                     vertical-stretch: 1;
-                    ParallaxControls {
+                    // Wrap in a fixed-width VerticalLayout so the ScrollView sizes
+                    // the content by its PREFERRED height (and thus scrolls when the
+                    // pipeline + tuning cards overflow a short/scaled window) instead
+                    // of stretching the controls to fit and clipping the last card.
+                    // The width also reserves the scrollbar gutter (same pattern as
+                    // the narrow layout + Compositor) so the highlighted scrollbar
+                    // never collides with the card edges.
+                    VerticalLayout {
                         width: 388px;
+                        ParallaxControls {
                         mode <=> root.mode;
                         image-name: root.image-name;
+                        preset-options: root.preset-options;
+                        preset-current: root.preset-current;
+                        protip: root.protip;
                         model-options: root.model-options;
                         model-current: root.model-current;
-                        model-status: root.model-status;
-                        model-need-download: root.model-need-download;
-                        downloading: root.downloading;
-                        cinematic: root.cinematic;
-                        lama-status: root.lama-status;
-                        lama-need-download: root.lama-need-download;
                         seg-options: root.seg-options;
                         seg-current: root.seg-current;
-                        style-options: root.style-options;
-                        style-current: root.style-current;
                         upscaler-options: root.upscaler-options;
                         upscaler-current: root.upscaler-current;
+                        style-options: root.style-options;
+                        style-current: root.style-current;
+                        models-need-download: root.models-need-download;
+                        downloading: root.downloading;
+                        download-text: root.download-text;
+                        download-percent: root.download-percent;
+                        param-height: root.param-height;
+                        param-zoom: root.param-zoom;
+                        param-steps: root.param-steps;
                         open-image => { root.open-image(); }
                         auto-detect => { root.auto-detect(); }
+                        preset-changed(v) => { root.preset-changed(v); }
                         model-changed(v) => { root.model-changed(v); }
-                        download-model => { root.download-model(); }
-                        cinematic-toggled(v) => { root.cinematic-toggled(v); }
-                        download-lama => { root.download-lama(); }
                         seg-changed(v) => { root.seg-changed(v); }
                         style-changed(v) => { root.style-changed(v); }
                         upscaler-changed(v) => { root.upscaler-changed(v); }
+                        download-models => { root.download-models(); }
+                        param-changed(n, v) => { root.param-changed(n, v); }
+                        }
                     }
                 }
                 HorizontalLayout {
                     spacing: 10px;
                     PillButton { horizontal-stretch: 1; btn-height: 56px; text: root.render-label; icon: "video"; clicked => { if (!root.busy) { root.render-requested(); } } }
-                    PillButton { horizontal-stretch: 1; btn-height: 56px; text: "SAVE TO LIBRARY"; icon: "save"; enabled: root.has-preview && !root.busy; clicked => { root.save-requested(); } }
+                    PillButton { horizontal-stretch: 1; btn-height: 56px; text: "SAVE TO LIBRARY"; icon: "save"; enabled: root.has-preview && !root.busy; clicked => { root.show-name-dialog = true; } }
                 }
             }
         }
@@ -1960,36 +2127,81 @@ component ParallaxStudio inherits Rectangle {
             ParallaxControls {
                 mode <=> root.mode;
                 image-name: root.image-name;
+                preset-options: root.preset-options;
+                preset-current: root.preset-current;
+                protip: root.protip;
                 model-options: root.model-options;
                 model-current: root.model-current;
-                model-status: root.model-status;
-                model-need-download: root.model-need-download;
-                downloading: root.downloading;
-                cinematic: root.cinematic;
-                lama-status: root.lama-status;
-                lama-need-download: root.lama-need-download;
                 seg-options: root.seg-options;
                 seg-current: root.seg-current;
-                style-options: root.style-options;
-                style-current: root.style-current;
                 upscaler-options: root.upscaler-options;
                 upscaler-current: root.upscaler-current;
+                style-options: root.style-options;
+                style-current: root.style-current;
+                models-need-download: root.models-need-download;
+                downloading: root.downloading;
+                download-text: root.download-text;
+                download-percent: root.download-percent;
+                param-height: root.param-height;
+                param-zoom: root.param-zoom;
+                param-steps: root.param-steps;
                 open-image => { root.open-image(); }
                 auto-detect => { root.auto-detect(); }
+                preset-changed(v) => { root.preset-changed(v); }
                 model-changed(v) => { root.model-changed(v); }
-                download-model => { root.download-model(); }
-                cinematic-toggled(v) => { root.cinematic-toggled(v); }
-                download-lama => { root.download-lama(); }
                 seg-changed(v) => { root.seg-changed(v); }
                 style-changed(v) => { root.style-changed(v); }
                 upscaler-changed(v) => { root.upscaler-changed(v); }
+                download-models => { root.download-models(); }
+                param-changed(n, v) => { root.param-changed(n, v); }
             }
             HorizontalLayout {
                 spacing: 10px;
                 PillButton { horizontal-stretch: 1; btn-height: 56px; text: root.render-label; icon: "video"; clicked => { if (!root.busy) { root.render-requested(); } } }
-                PillButton { horizontal-stretch: 1; btn-height: 56px; text: "SAVE TO LIBRARY"; icon: "save"; enabled: root.has-preview && !root.busy; clicked => { root.save-requested(); } }
+                PillButton { horizontal-stretch: 1; btn-height: 56px; text: "SAVE TO LIBRARY"; icon: "save"; enabled: root.has-preview && !root.busy; clicked => { root.show-name-dialog = true; } }
             }
             ParallaxPreview { height: 460px; preview-image: root.preview-image; status: root.status; progress: root.progress; }
+        }
+    }
+
+    // ── "Name your wallpaper" dialog (opened by SAVE TO LIBRARY) ──────────────
+    if root.show-name-dialog : Rectangle {
+        // Dim full-cover backdrop; clicking it cancels.
+        background: #000000aa;
+        TouchArea { clicked => { root.show-name-dialog = false; } }
+        Rectangle {
+            width: 400px; height: name-col.preferred-height + 48px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: Theme.palette.card;
+            border-radius: 16px; border-width: 1px; border-color: Theme.palette.border;
+            drop-shadow-blur: 40px; drop-shadow-color: #00000066;
+            // Absorb clicks so they don't fall through to the dismissing backdrop.
+            TouchArea {}
+            name-col := VerticalLayout {
+                padding: 24px; spacing: 14px;
+                Text { text: "Name your wallpaper"; font-size: 16px; font-weight: 700; color: Theme.palette.text; }
+                Text { text: "Optional — leave blank to use the image's file name."; font-size: 12px; color: Theme.palette.text-muted; wrap: word-wrap; }
+                name-input := BlueInput { placeholder: "My Parallax Wallpaper"; }
+                HorizontalLayout {
+                    spacing: 12px; alignment: end;
+                    Rectangle {
+                        width: 96px; height: 44px; border-radius: 12px;
+                        background: cancel-ta.has-hover ? Theme.palette.card-hover : transparent;
+                        border-width: 1px; border-color: Theme.palette.border;
+                        Text { text: "CANCEL"; color: Theme.palette.text-muted; font-size: 11px; font-weight: 800; letter-spacing: 1px;
+                               horizontal-alignment: center; vertical-alignment: center; }
+                        cancel-ta := TouchArea { clicked => { root.show-name-dialog = false; } mouse-cursor: pointer; }
+                    }
+                    PillButton {
+                        width: 140px; btn-height: 44px; text: "SAVE"; icon: "save";
+                        clicked => {
+                            root.save-requested(name-input.text);
+                            root.show-name-dialog = false;
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -2071,6 +2283,8 @@ export component AppWindow inherits Window {
 
     // Keep the std-widgets palette (used by ScrollView scrollbars) in sync with
     // our custom theme, so scrollbars are visible/correct in both light & dark.
+    // (Palette accent colors are read-only here, so std widgets we want fully
+    // themed — e.g. the name-input field — are custom components instead.)
     property <bool> is-dark-tracker: Theme.is-dark;
     init => { Palette.color-scheme = Theme.is-dark ? ColorScheme.dark : ColorScheme.light; }
     changed is-dark-tracker => { Palette.color-scheme = self.is-dark-tracker ? ColorScheme.dark : ColorScheme.light; }
@@ -2110,7 +2324,7 @@ export component AppWindow inherits Window {
     in-out property <string> vsync-mode:     "Fifo (VSync On)";
     in-out property <string> shader-quality: "High (Maximum Fidelity)";
     in-out property <float>  audio-sensitivity: 1.0;
-    in-out property <bool>   mouse-interactive: false;
+    in-out property <string> mouse-mode: "On (Only Parallax Studio)";
     in-out property <float>  mouse-sensitivity: 1.0;
     in-out property <string> search-query: "";
     // Library thumbnail refresh: `refreshing` is true while the background thumb
@@ -2126,20 +2340,37 @@ export component AppWindow inherits Window {
     callback import-requested();
     callback refresh-library();
     callback wallpaper-delete-requested(int);
+    // Open an external URL (e.g. a shader's original Shadertoy page) in the browser.
+    callback open-url(string);
+    // Updates: GitHub-release check. Rust sets the badge/label/flags; the button
+    // either runs the check or (when an update is available) opens the releases page.
+    in-out property <string> update-version-badge: "v1.0.0 (LATEST)";
+    in-out property <string> update-button-label: "CHECK FOR UPDATES";
+    in-out property <string> update-url;          // latest release page (when available)
+    in-out property <bool> update-available;
+    in-out property <bool> update-checking;
+    callback check-for-updates();
+    // Asset Library (Strata-Library) update state — mirrors the engine's.
+    in-out property <string> lib-update-version-badge: "v1.0.0 (LATEST)";
+    in-out property <string> lib-update-button-label: "CHECK FOR UPDATES";
+    in-out property <string> lib-update-url;
+    in-out property <bool> lib-update-available;
+    in-out property <bool> lib-update-checking;
+    callback check-for-library-updates();
     // Parallax Studio
     callback parallax-pick-image();
     callback parallax-create();
-    callback parallax-save();
+    callback parallax-save(string);
+    callback parallax-preset-changed(string);
     callback parallax-model-changed(string);
-    callback parallax-download-model();
-    callback parallax-cinematic-toggled(bool);
-    callback parallax-download-lama();
     callback parallax-seg-changed(string);
     callback parallax-style-changed(string);
     callback parallax-upscaler-changed(string);
-    in-out property <bool>   parallax-cinematic: false;
-    in-out property <string> parallax-lama-status: "";
-    in-out property <bool>   parallax-lama-need-download: false;
+    callback parallax-download-models();
+    in-out property <string> parallax-mode: "automatic";
+    in-out property <[string]> parallax-preset-options: [];
+    in-out property <string> parallax-preset-current: "";
+    in-out property <string> parallax-protip: "";
     in-out property <[string]> parallax-seg-options: [];
     in-out property <string> parallax-seg-current: "";
     in-out property <[string]> parallax-style-options: [];
@@ -2154,9 +2385,14 @@ export component AppWindow inherits Window {
     in-out property <bool>   parallax-has-preview: false;
     in-out property <[string]> parallax-model-options: ["Fast (no model)"];
     in-out property <string> parallax-model-current: "Fast (no model)";
-    in-out property <string> parallax-model-status: "";
-    in-out property <bool>   parallax-model-need-download: false;
+    in-out property <bool>   parallax-models-need-download: false;
+    in-out property <string> parallax-download-text: "";
+    in-out property <int>    parallax-download-percent: 0;
     in-out property <bool>   parallax-downloading: false;
+    in-out property <float>  parallax-param-height: 0.2;
+    in-out property <float>  parallax-param-zoom: 1.06;
+    in-out property <float>  parallax-param-steps: 10;
+    callback parallax-param-changed(string, float);
     callback search-edited(string);
     callback monitor-selected(int);
     callback layer-opacity-changed(int, float);
@@ -2184,7 +2420,7 @@ export component AppWindow inherits Window {
     callback refresh-monitors();
     callback toast-dismissed(int);
     callback audio-sensitivity-changed(float);
-    callback mouse-interactive-toggled(bool);
+    callback mouse-mode-changed(string);
     callback mouse-sensitivity-changed(float);
 
     // â"€â"€ Root layout â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
@@ -2253,6 +2489,10 @@ export component AppWindow inherits Window {
                 Rectangle { height: 8px; }
 
                 SidebarButton {
+                    icon: "discord"; text: "Join the Discord";
+                    clicked => { root.open-url("https://discord.gg/qRdVSkUW6n"); }
+                }
+                SidebarButton {
                     icon: "log-out"; text: L10n.btn-quit; danger: true;
                     clicked => { root.quit-requested(); }
                 }
@@ -2278,21 +2518,6 @@ export component AppWindow inherits Window {
                         font-size: 34px; font-weight: 700;
                         color: Theme.palette.text;
                         vertical-alignment: center;
-                    }
-                    if root.active-tab == "parallax" : Rectangle {
-                        y: 8px;
-                        height: 22px; width: up-row.preferred-width + 20px;
-                        border-radius: 6px;
-                        background: Theme.palette.card-hover;
-                        up-row := HorizontalLayout {
-                            padding-left: 10px; padding-right: 10px; alignment: center;
-                            Text {
-                                text: "UPCOMING";
-                                color: Theme.palette.text-muted;
-                                font-size: 9px; font-weight: 800; letter-spacing: 2px;
-                                vertical-alignment: center;
-                            }
-                        }
                     }
                 }
                 Text {
@@ -2435,6 +2660,9 @@ export component AppWindow inherits Window {
                                             monitors:      root.monitors;
                                             is-active:     wallpaper.is-active;
                                             is-parallax:   wallpaper.is-parallax;
+                                            is-imported:   wallpaper.is-imported;
+                                            source-url:    wallpaper.source-url;
+                                            open-url(u) => { root.open-url(u); }
                                             toggle-monitor(idx) => { root.apply-to-monitor(idx, wallpaper.name); }
                                             delete-requested => { root.wallpaper-delete-requested(i); }
                                         }
@@ -2461,37 +2689,42 @@ export component AppWindow inherits Window {
             // == Parallax Studio ===============================================
             if root.active-tab == "parallax" : ParallaxStudio {
                 vertical-stretch: 1;
+                mode <=> root.parallax-mode;
                 image-name: root.parallax-image-name;
                 busy: root.parallax-busy;
                 status: root.parallax-status;
+                preset-options: root.parallax-preset-options;
+                preset-current: root.parallax-preset-current;
+                protip: root.parallax-protip;
                 model-options: root.parallax-model-options;
                 model-current: root.parallax-model-current;
-                model-status: root.parallax-model-status;
-                model-need-download: root.parallax-model-need-download;
-                downloading: root.parallax-downloading;
-                cinematic: root.parallax-cinematic;
-                lama-status: root.parallax-lama-status;
-                lama-need-download: root.parallax-lama-need-download;
                 seg-options: root.parallax-seg-options;
                 seg-current: root.parallax-seg-current;
                 style-options: root.parallax-style-options;
                 style-current: root.parallax-style-current;
                 upscaler-options: root.parallax-upscaler-options;
                 upscaler-current: root.parallax-upscaler-current;
+                models-need-download: root.parallax-models-need-download;
+                downloading: root.parallax-downloading;
+                download-text: root.parallax-download-text;
+                download-percent: root.parallax-download-percent;
+                param-height: root.parallax-param-height;
+                param-zoom: root.parallax-param-zoom;
+                param-steps: root.parallax-param-steps;
                 preview-image: root.parallax-preview-image;
                 has-preview: root.parallax-has-preview;
                 progress: root.parallax-progress;
                 open-image => { root.parallax-pick-image(); }
                 render-requested => { root.parallax-create(); }
                 auto-detect => { root.parallax-create(); }
-                save-requested => { root.parallax-save(); }
+                save-requested(n) => { root.parallax-save(n); }
+                preset-changed(v) => { root.parallax-preset-changed(v); }
                 model-changed(v) => { root.parallax-model-changed(v); }
-                download-model => { root.parallax-download-model(); }
-                cinematic-toggled(v) => { root.parallax-cinematic-toggled(v); }
-                download-lama => { root.parallax-download-lama(); }
                 seg-changed(v) => { root.parallax-seg-changed(v); }
                 style-changed(v) => { root.parallax-style-changed(v); }
                 upscaler-changed(v) => { root.parallax-upscaler-changed(v); }
+                download-models => { root.parallax-download-models(); }
+                param-changed(n, v) => { root.parallax-param-changed(n, v); }
             }
 
             // â•گâ•گ Compositor tab â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
@@ -2564,24 +2797,36 @@ export component AppWindow inherits Window {
                     }
                     ScrollView {
                         vertical-stretch: 1;
-                        LayerStack {
-                            // No inner scroll — this ScrollView handles it, so there's
-                            // a single scrollbar and the layers stack below each other.
-                            scrollable: false;
-                            layers: root.layers;
-                            monitor-name: root.selected-monitor-index >= 0 ? root.monitors[root.selected-monitor-index].name : "No display selected";
-                            move-up(i) => { root.layer-move-up(i); }
-                            move-down(i) => { root.layer-move-down(i); }
-                            remove(i) => { root.layer-remove-requested(i); }
-                            opacity-changed(i, o) => { root.layer-opacity-changed(i, o); }
-                            blend-changed(i, b) => { root.layer-blend-changed(i, b); }
-                            visibility-toggled(i, v) => { root.layer-visibility-toggled(i, v); }
-                            edit-requested(i) => {
-                                root.editing-layer = i;
-                                root.edit-x = root.layers[i].positioning == "Custom" ? root.layers[i].x : 0;
-                                root.edit-y = root.layers[i].positioning == "Custom" ? root.layers[i].y : 0;
-                                root.edit-w = root.layers[i].positioning == "Custom" ? root.layers[i].width  : root.monitors[root.selected-monitor-index].width;
-                                root.edit-h = root.layers[i].positioning == "Custom" ? root.layers[i].height : root.monitors[root.selected-monitor-index].height;
+                        // Match the working tabs: an INLINE width-constrained VerticalLayout
+                        // is what reserves the scrollbar gutter and lets the ScrollView size
+                        // the content (setting width on the LayerStack component directly does
+                        // not constrain it inside a ScrollView, so the cards ran full-width
+                        // over where the scrollbar should be).
+                        VerticalLayout {
+                            // -34px (not -26) because this ScrollView sits inside the 4px-
+                            // padded canvas/list column, so we reserve a touch more to keep
+                            // the SAME visible gap between the cards and the scrollbar lane
+                            // that the other tabs have (no hover collision with card edges).
+                            width: comp-area.width - 34px;
+                            padding: 4px;
+                            LayerStack {
+                                // No inner scroll — this ScrollView handles it.
+                                scrollable: false;
+                                layers: root.layers;
+                                monitor-name: root.selected-monitor-index >= 0 ? root.monitors[root.selected-monitor-index].name : "No display selected";
+                                move-up(i) => { root.layer-move-up(i); }
+                                move-down(i) => { root.layer-move-down(i); }
+                                remove(i) => { root.layer-remove-requested(i); }
+                                opacity-changed(i, o) => { root.layer-opacity-changed(i, o); }
+                                blend-changed(i, b) => { root.layer-blend-changed(i, b); }
+                                visibility-toggled(i, v) => { root.layer-visibility-toggled(i, v); }
+                                edit-requested(i) => {
+                                    root.editing-layer = i;
+                                    root.edit-x = root.layers[i].positioning == "Custom" ? root.layers[i].x : 0;
+                                    root.edit-y = root.layers[i].positioning == "Custom" ? root.layers[i].y : 0;
+                                    root.edit-w = root.layers[i].positioning == "Custom" ? root.layers[i].width  : root.monitors[root.selected-monitor-index].width;
+                                    root.edit-h = root.layers[i].positioning == "Custom" ? root.layers[i].height : root.monitors[root.selected-monitor-index].height;
+                                }
                             }
                         }
                     }
@@ -2620,13 +2865,24 @@ export component AppWindow inherits Window {
                                 }
                                 InteractivitySettings {
                                     audio-sensitivity: root.audio-sensitivity;
-                                    mouse-interactive: root.mouse-interactive;
+                                    mouse-mode: root.mouse-mode;
                                     mouse-sensitivity: root.mouse-sensitivity;
                                     audio-sensitivity-changed(v) => { root.audio-sensitivity = v; root.audio-sensitivity-changed(v); }
-                                    mouse-interactive-toggled(v) => { root.mouse-interactive = v; root.mouse-interactive-toggled(v); }
+                                    mouse-mode-changed(v) => { root.mouse-mode = v; root.mouse-mode-changed(v); }
                                     mouse-sensitivity-changed(v) => { root.mouse-sensitivity = v; root.mouse-sensitivity-changed(v); }
                                 }
-                                UpdatesSettings { }
+                                UpdatesSettings {
+                                    version-badge: root.update-version-badge;
+                                    update-button-label: root.update-button-label;
+                                    update-available: root.update-available;
+                                    update-checking: root.update-checking;
+                                    update-clicked => { root.check-for-updates(); }
+                                    lib-version-badge: root.lib-update-version-badge;
+                                    lib-update-button-label: root.lib-update-button-label;
+                                    lib-update-available: root.lib-update-available;
+                                    lib-update-checking: root.lib-update-checking;
+                                    lib-update-clicked => { root.check-for-library-updates(); }
+                                }
                             }
                         }
 
@@ -2644,14 +2900,25 @@ export component AppWindow inherits Window {
                             }
                             InteractivitySettings {
                                 audio-sensitivity: root.audio-sensitivity;
-                                mouse-interactive: root.mouse-interactive;
+                                mouse-mode: root.mouse-mode;
                                 mouse-sensitivity: root.mouse-sensitivity;
                                 audio-sensitivity-changed(v) => { root.audio-sensitivity = v; root.audio-sensitivity-changed(v); }
-                                mouse-interactive-toggled(v) => { root.mouse-interactive = v; root.mouse-interactive-toggled(v); }
+                                mouse-mode-changed(v) => { root.mouse-mode = v; root.mouse-mode-changed(v); }
                                 mouse-sensitivity-changed(v) => { root.mouse-sensitivity = v; root.mouse-sensitivity-changed(v); }
                             }
                             IntegrationsSettings { }
-                            UpdatesSettings { }
+                            UpdatesSettings {
+                                    version-badge: root.update-version-badge;
+                                    update-button-label: root.update-button-label;
+                                    update-available: root.update-available;
+                                    update-checking: root.update-checking;
+                                    update-clicked => { root.check-for-updates(); }
+                                    lib-version-badge: root.lib-update-version-badge;
+                                    lib-update-button-label: root.lib-update-button-label;
+                                    lib-update-available: root.lib-update-available;
+                                    lib-update-checking: root.lib-update-checking;
+                                    lib-update-clicked => { root.check-for-library-updates(); }
+                                }
                         }
                     }
                 }

@@ -4,3 +4,11 @@ members = [
     "platform-shells/strata-desktop",
 ]
 resolver = "2"
+
+# Optimized + lean release builds. NOTE: do NOT set panic = "abort" — the shader
+# pipeline relies on std::panic::catch_unwind to survive a bad shader (naga can
+# panic on some Shadertoy code); abort would crash the whole app instead.
+[profile.release]
+strip = true        # drop symbols from the exe
+lto = "thin"        # cross-crate inlining; smaller + faster
+codegen-units = 1   # better optimization (smaller binary)

@@ -118,34 +118,19 @@ To replicate Shadertoy's globally accessible Common tab, the shader loader autom
 
 ---
 
-## 🗺️ Roadmap
+## 🗺️ To-do-list
 
-Phases 1–3 (graphics foundation, advanced composition, and the native Slint shell) are complete and shipped in the current Windows build.
+Graphics foundation, advanced composition, parallax modue, and the native Slint shell are complete and shipped in the current Windows build.
 
-### Phase 4 — Refinement & Localization
-
-Iron out the experience on the platform we have before expanding outward.
-
+- [ ] **Game/Intensive-app auto-pause:** Detect when a fullscreen game or other GPU/CPU-heavy app is in the foreground and automatically pause shader rendering (resuming when it exits) so Strata never competes for resources during play.
+- [ ] **Daily wallpaper curation:** An opt-in mode that automatically rotates the active wallpaper(s) each day, randomly picking from the library (or a user-chosen subset) for a fresh desktop every morning.
+- [ ] **Parallax auto-detect:** Detect the user's hardware (GPU class, RAM) and automatically pick the optimal Parallax Studio quality preset, so the "Auto-Detect" button in Automatic mode becomes functional.
+- [ ] **Asset Library:** An exclusive repository hosting wgpu-patched shaders, Parallax module presets and model lists.
 - [ ] **Translation Support:** Build on the existing i18n-ready string organization to ship actual multi-language support in the Slint UI.
 - [ ] **Screensaver Mode:** Reuse the renderer as a native screensaver target, fulfilling the engine's dual wallpaper/screensaver mandate.
 - [ ] **Distribution Polish:** Installer/packaged build for Windows with sensible defaults (autostart opt-in, per-user data dirs).
-
-### Phase 5 — AI & The 3D Parallax Module
-
-- [x] **ONNX Runtime Framework:** Embed a local inference runtime using `ort` — no external server dependencies.
-- [x] **Automatic Depth Map Generation:** Run lightweight vision models (e.g., DepthAnything) locally to convert user images into grayscale depth-displacement maps.
-- [x] **UV Displacement Pipeline:** A parallax shader that distorts textures based on depth data, driven by real-time mouse tracking (and phone gyroscopes once mobile shells exist).
-- [x] **Parallax Creation UI:** Let users build interactive 3D-styled wallpapers from their own images entirely on-device.
-
-### Phase 6 — External API Integrations
-
 - [ ] **Async Telemetry Routing:** A background `reqwest`-based system for querying live web APIs without touching the render loop.
 - [ ] **Spotify "Now Playing":** OAuth integration surfacing track metadata and artwork as dynamic textures inside active shaders (UI placeholder already exists).
-
-### Phase 7 — Cross-Platform Deployment
-
-Port the shells, not the renderer. `core-engine` stays untouched; each platform gets a thin host.
-
 - [ ] **Linux:** Wayland `wlr-layer-shell` (and X11 fallback) desktop integration, reusing the Slint configuration shell.
 - [ ] **Android:** Native package (`com.strata.engine`) binding the renderer into Android's `WallpaperService` via the NDK, with platform-correct lifecycle, surfaces, and storage.
 - [ ] **macOS:** Desktop-behind-icons integration for macOS spaces, menu-bar/tray equivalents, and app-bundle packaging.
@@ -164,3 +149,16 @@ Port the shells, not the renderer. `core-engine` stays untouched; each platform 
 | **Resilience** | GPU device loss (driver TDR/reset) is detected via `wgpu`'s device-lost callback and recovered automatically. |
 | **Safety & Handles** | Platform window handle lifetimes must match the backend lifetime scopes enforced by `wgpu::Surface<'static>`. |
 | **Cross-Platform Paths** | No hardcoded paths — wallpapers, thumbnails, config, and logs resolve through OS-correct per-user directories via platform abstractions. |
+
+---
+
+## 📜 License
+
+Strata is **free and open-source software**, licensed under the **GNU General Public License v3.0 or later (GPL-3.0-or-later)** — see the [`LICENSE`](LICENSE) file. This is a deliberate strong-copyleft choice: anyone may use, study, modify, and redistribute Strata, but **every distributed fork or derivative must also stay open-source under the GPL** — no one can take Strata closed-source or ship a proprietary version of it. It is meant to stay free forever; there are no paid tiers and no donations. Issues and pull requests are welcome.
+
+This repository contains **only the engine**. It deliberately hosts **no** shaders, model weights, model lists, presets, or wallpapers — not even the `models.toml` / `presets.toml` registries. Instead the app points at external content via [`repositories.toml`](repositories.toml):
+
+- **Shaders, presets, thumbnails, and the `models.toml`/`presets.toml` registries** live in the separate **[Strata-Library](https://github.com/BadassBaboon/Strata-Library)** repo and are fetched at runtime.
+- **Model weights** are pulled on demand from **[Hugging Face](https://huggingface.co/)**.
+
+This keeps the engine repository small and license-clean: third-party shaders and models retain their own authors' licenses and are never redistributed here.
