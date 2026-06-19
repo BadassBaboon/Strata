@@ -182,7 +182,7 @@ pub fn import_wallpaper_zip(zip_path: &Path, dest_base: &Path) -> Result<PathBuf
 /// `%APPDATA%/strata` (Roaming) — root for user-generated content that must NOT
 /// live in the (read-only in release) install directory.
 pub fn user_data_dir() -> Option<PathBuf> {
-    directories::BaseDirs::new().map(|b| b.data_dir().join("strata"))
+    directories::BaseDirs::new().map(|b| b.data_dir().join("Strata"))
 }
 
 /// Where Parallax Studio creations are saved: `%APPDATA%/strata/parallax-wallpapers`.
@@ -206,13 +206,57 @@ pub fn bundled_library_dir() -> PathBuf {
     }
 }
 
-/// All directories the Library scans: the bundled library plus the user roots
-/// (parallax creations + imported shaders).
+/// The runtime-fetched shader library: `%APPDATA%/strata/strata-library/shader-library`
+/// (downloaded from the Strata-Library repo). This is the primary curated library
+/// now that the app no longer bundles shaders.
+pub fn fetched_library_dir() -> Option<PathBuf> {
+    user_data_dir().map(|d| d.join("strata-library").join("shader-library"))
+}
+
+/// Root of the fetched library tree (`…/strata-library`) — holds shader-library/,
+/// external/, models.toml, presets.toml, index.toml. The sync target.
+pub fn fetched_library_root() -> Option<PathBuf> {
+    user_data_dir().map(|d| d.join("strata-library"))
+}
+
+/// True once at least one shader has been fetched into the library.
+pub fn library_installed() -> bool {
+    fetched_library_dir()
+        .map(|d| std::fs::read_dir(&d).map(|mut e| e.any(|x| {
+            x.ok().map(|x| x.path().join("manifest.toml").exists()).unwrap_or(false)
+        })).unwrap_or(false))
+        .unwrap_or(false)
+}
+
+/// All directories the Library scans: the fetched library + the bundled folder (a
+/// dev convenience, usually absent) + the user roots (parallax + imports).
 pub fn library_roots() -> Vec<PathBuf> {
     let mut roots = vec![bundled_library_dir()];
+    roots.extend(fetched_library_dir());
     roots.extend(parallax_library_dir());
     roots.extend(import_library_dir());
     roots
+}
+
+/// Owner + repo of the official content repository, parsed from its jsDelivr URL
+/// (`…/gh/OWNER/REPO@tag`). Used for the GitHub tags / zipball endpoints.
+pub fn official_owner_repo() -> Option<(String, String)> {
+    let url = official_repo_url()?;
+    // Accept the jsDelivr form (…/gh/OWNER/REPO[@tag]) or the plain GitHub form
+    // (github.com/OWNER/REPO[.git]). Any @tag / trailing path is discarded — the
+    // version is resolved from the repo's tags, not from this URL.
+    let rest = if let Some(r) = url.split("/gh/").nth(1) {
+        r
+    } else if let Some(r) = url.split("github.com/").nth(1) {
+        r
+    } else {
+        return None;
+    };
+    let path = rest.split(['@', '#', '?']).next()?;
+    let mut parts = path.trim_matches('/').splitn(3, '/');
+    let owner = parts.next()?.to_string();
+    let repo = parts.next()?.trim_end_matches(".git").trim_end_matches('/').to_string();
+    if owner.is_empty() || repo.is_empty() { None } else { Some((owner, repo)) }
 }
 
 /// True if `path` lives in a user-writable root (parallax or import) and may

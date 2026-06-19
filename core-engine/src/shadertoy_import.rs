@@ -483,54 +483,17 @@ fn scan_call_args(bytes: &[u8], open: usize) -> (Option<usize>, bool) {
 mod tests {
     use super::*;
 
-    // Render real thumbnails for the texture + cubemap samples to exercise the
-    // full GPU pipeline (bind-group layouts, cube view), not just the naga check.
-    // cargo test -p core-engine --lib render_samples -- --ignored --nocapture
+    // The naga `mat2` rewrite: single-argument `mat2(...)` becomes `_stm2(...)`,
+    // while multi-arg constructors and identifiers that merely contain "mat2" are
+    // left alone. (File-free regression for the import compatibility fix.)
     #[test]
-    #[ignore]
-    fn render_samples() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-        let temp = root.join(".temp-prototype");
-        crate::set_asset_dirs(vec![root.join("assets").join("external")]);
-        let ctx = std::sync::Arc::new(
-            pollster::block_on(crate::GraphicsContext::new_render_only()).unwrap(),
-        );
-        for json_name in ["lsSGRc.json", "332XWd.json", "33cGDj.json"] {
-            let json = std::fs::read_to_string(temp.join(json_name)).unwrap();
-            let dest = std::env::temp_dir().join(format!("strata-render-{}", json_name.replace('.', "_")));
-            let _ = std::fs::remove_dir_all(&dest);
-            convert_shadertoy(&json, &dest).unwrap();
-            let out = dest.join("thumb.png");
-            match crate::thumbnail::generate_thumbnail(ctx.clone(), &dest, &out, 320, 200) {
-                Ok(()) => println!("RENDER OK  {json_name} -> {:?}", out),
-                Err(e) => panic!("RENDER FAIL {json_name}: {e}"),
-            }
-        }
-    }
-
-    // cargo test -p core-engine convert_samples -- --ignored --nocapture
-    #[test]
-    #[ignore]
-    fn convert_samples() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-        let temp = root.join(".temp-prototype");
-        crate::set_asset_dirs(vec![root.join("assets").join("external")]);
-        for json_name in ["33cGDj.json", "lsSGRc.json", "332XWd.json"] {
-            let json = std::fs::read_to_string(temp.join(json_name)).unwrap();
-            let dest = std::env::temp_dir().join(format!("strata-test-{}", json_name.replace('.', "_")));
-            let _ = std::fs::remove_dir_all(&dest);
-            println!("\n=== {json_name} ===");
-            match convert_shadertoy(&json, &dest) {
-                Ok(r) => {
-                    println!("OK name={:?} warnings={:?}", r.name, r.warnings);
-                    println!("--- manifest.toml ---\n{}", std::fs::read_to_string(dest.join("manifest.toml")).unwrap());
-                    let mut files: Vec<_> = std::fs::read_dir(&dest).unwrap()
-                        .filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect();
-                    files.sort();
-                    println!("files: {files:?}");
-                }
-                Err(e) => println!("ERR: {e}"),
-            }
-        }
+    fn mat2_rewrite() {
+        let src = "a=mat2(cos(t+vec4(0,11,33,0))); b=mat2(c,s,-s,c); x=xmat2(1.0); y=mat2x2(z);";
+        let out = patch_naga_mat2(src);
+        assert!(out.contains("_stm2(cos(t+vec4(0,11,33,0)))"), "single-arg mat2 should rewrite: {out}");
+        assert!(out.contains("mat2(c,s,-s,c)"), "multi-arg mat2 must be kept: {out}");
+        assert!(out.contains("xmat2(1.0)"), "identifier-prefixed must be kept: {out}");
+        assert!(out.contains("mat2x2(z)"), "mat2x2 must be kept: {out}");
+        assert!(!out.contains("_stm2(c,s"), "multi-arg must not rewrite");
     }
 }

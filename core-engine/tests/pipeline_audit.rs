@@ -9,6 +9,28 @@ use core_engine::{GraphicsContext, WallpaperPipeline, UniformState, Renderer};
 use core_engine::manifest::WallpaperConfig;
 use std::sync::Arc;
 
+/// Folder of wallpaper sub-dirs to audit. Defaults to the in-repo `wallpapers/`
+/// dir, but `STRATA_AUDIT_DIR` overrides it so we can validate an arbitrary set
+/// (e.g. Strata-Library/import) before packing a release.
+fn audit_root() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("STRATA_AUDIT_DIR") {
+        return std::path::PathBuf::from(p);
+    }
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent().unwrap().join("wallpapers")
+}
+
+/// Register shared texture/cubemap roots so shaders resolve their `external/`
+/// assets by sha-name (mirrors the app's `set_asset_dirs`). Looks beside the
+/// audit root for an `external/` dir (e.g. Strata-Library/{import,external}).
+fn register_asset_dirs(root: &std::path::Path) {
+    let mut dirs = vec![root.join("external")];
+    if let Some(parent) = root.parent() {
+        dirs.push(parent.join("external"));
+    }
+    core_engine::set_asset_dirs(dirs);
+}
+
 #[test]
 #[ignore]
 fn audit_pipeline_all_wallpapers() {
@@ -19,8 +41,8 @@ async fn run() {
     let ctx = GraphicsContext::new().await.expect("gpu");
     let uniforms = UniformState::new(&ctx.device, 1920.0, 1080.0);
 
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().join("wallpapers");
+    let root = audit_root();
+    register_asset_dirs(&root);
     let mut dirs: Vec<_> = std::fs::read_dir(&root).unwrap()
         .filter_map(|e| e.ok()).map(|e| e.path())
         .filter(|p| p.join("manifest.toml").exists())
@@ -75,8 +97,8 @@ async fn render_run() {
     });
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().join("wallpapers");
+    let root = audit_root();
+    register_asset_dirs(&root);
     let mut dirs: Vec<_> = std::fs::read_dir(&root).unwrap()
         .filter_map(|e| e.ok()).map(|e| e.path())
         .filter(|p| p.join("manifest.toml").exists())

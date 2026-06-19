@@ -13,7 +13,7 @@ use core_engine::parallax::{export_wallpaper, ParallaxParams};
 
 /// `%AppData%/strata/models` — where downloaded depth models live (never bundled).
 pub fn models_dir() -> Option<PathBuf> {
-    directories::BaseDirs::new().map(|b| b.data_dir().join("strata").join("models"))
+    directories::BaseDirs::new().map(|b| b.data_dir().join("Strata").join("models"))
 }
 
 /// On-disk directory for a model's files (`models/<id>/`).
@@ -114,7 +114,7 @@ fn estimate_depth(image: &image::DynamicImage, model: Option<&ModelChoice>) -> R
 /// `%AppData%/strata/parallax-preview` — scratch package for the live preview
 /// (photo + depth + baked shader). Reused across renders so depth is estimated once.
 pub fn preview_dir() -> Option<PathBuf> {
-    directories::BaseDirs::new().map(|b| b.data_dir().join("strata").join("parallax-preview"))
+    directories::BaseDirs::new().map(|b| b.data_dir().join("Strata").join("parallax-preview"))
 }
 
 /// Estimate depth for `image_path` and build a parallax package in the preview

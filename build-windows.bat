@@ -201,10 +201,11 @@ exit /b 0
 :: =====================================================
 :: Distribution packaging (release modes)
 :: =====================================================
-:: Assemble dist\Strata with only what ships: exe + DLLs + repositories.toml +
-:: data dirs. Wallpapers come from Strata-Library\shader-library when present
-:: (it has pre-generated thumbnail.png — a read-only install can't make them
-:: afterwards); otherwise from wallpapers\. Flat command flow (no parenthesised
+:: Assemble dist\Strata with ONLY what ships: the exe, runtime DLLs,
+:: repositories.toml, and the app's own assets\ (UI icons/fonts/logo + the tray
+:: app-icon PNGs that load_tray_icon reads at runtime). NO wallpapers and NO
+:: assets\external -- the shader library and its textures are fetched at runtime
+:: from Strata-Library into %APPDATA%\strata. Flat command flow (no parenthesised
 :: blocks) to avoid batch paren/escaping pitfalls.
 :make_dist
 echo.
@@ -215,12 +216,8 @@ mkdir "!DIST!"
 copy /y "%OUTPUT_DIR%strata-desktop.exe" "!DIST!\" >nul
 copy /y "%OUTPUT_DIR%*.dll" "!DIST!\" >nul 2>nul
 copy /y "repositories.toml" "!DIST!\" >nul 2>nul
-set "WPSRC=wallpapers"
-if exist "Strata-Library\shader-library" set "WPSRC=Strata-Library\shader-library"
-if not exist "Strata-Library\shader-library" echo   note: Strata-Library not assembled - wallpapers ship without thumbnails
-xcopy /e /i /y /q "!WPSRC!" "!DIST!\wallpapers" >nul
 xcopy /e /i /y /q "assets" "!DIST!\assets" >nul
-echo   Distribution ready: !DIST!  - zip this folder to share
+echo   Distribution ready: !DIST!  ^(wallpapers are fetched at runtime^) - zip to share
 goto :eof
 
 :: =====================================================

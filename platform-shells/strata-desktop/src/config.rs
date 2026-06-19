@@ -82,7 +82,7 @@ pub struct MonitorConfig {
 
 impl Config {
     pub fn get_path() -> Option<PathBuf> {
-        ProjectDirs::from("com", "strata", "engine").map(|proj_dirs| {
+        ProjectDirs::from("com", "Strata", "engine").map(|proj_dirs| {
             let config_dir = proj_dirs.config_dir();
             if !config_dir.exists() {
                 fs::create_dir_all(config_dir).ok();

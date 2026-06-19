@@ -16,6 +16,7 @@ mod platform;
 mod controller;
 mod config;
 mod parallax;
+mod library_sync;
 
 use platform::EngineCommand;
 use controller::{AppState, import_wallpaper_zip, discover_monitors, LayerInfo};
@@ -54,7 +55,7 @@ impl log::Log for SlintLogger {
 /// Open (append) the persistent log file alongside the config, writing a session
 /// marker. Returns None if the directory can't be resolved/created.
 fn open_log_file() -> Option<std::fs::File> {
-    let dir = directories::ProjectDirs::from("com", "strata", "engine")?
+    let dir = directories::ProjectDirs::from("com", "Strata", "engine")?
         .config_dir()
         .to_path_buf();
     std::fs::create_dir_all(&dir).ok()?;
@@ -611,7 +612,55 @@ fn sync_wallpaper_windows(
     spawn_wallpaper_windows(app_state, command_tx, context, store);
 }
 
+/// Returns `true` if another Strata instance already holds the single-instance
+/// lock. Uses a named mutex (per-login-session via the `Local\` namespace) whose
+/// handle is intentionally leaked so it stays open for this process's whole life —
+/// any later instance then sees `ERROR_ALREADY_EXISTS`. Fails open (returns false)
+/// if the mutex can't be created, so a quirk never prevents the app from launching.
+#[cfg(windows)]
+fn another_instance_running() -> bool {
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+    use windows_sys::Win32::Foundation::{GetLastError, CloseHandle, ERROR_ALREADY_EXISTS};
+    unsafe {
+        let name: Vec<u16> = "Local\\Strata-Desktop-SingleInstance".encode_utf16().chain(std::iter::once(0)).collect();
+        let handle = CreateMutexW(std::ptr::null(), 1, name.as_ptr());
+        if handle == 0 {
+            return false; // couldn't create the lock — allow launch rather than block it
+        }
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            CloseHandle(handle);
+            return true;
+        }
+        // Deliberately never CloseHandle: the mutex must stay open for this process's
+        // whole life so later instances keep seeing ERROR_ALREADY_EXISTS. The handle is
+        // a plain OS handle (no Drop) and Windows releases it automatically on exit.
+        false
+    }
+}
+
+#[cfg(not(windows))]
+fn another_instance_running() -> bool { false }
+
+/// Best-effort: tell the user (who just double-clicked the exe) that Strata is
+/// already running in the tray, so a silent no-op isn't confusing.
+#[cfg(windows)]
+fn notify_already_running() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK, MB_ICONINFORMATION};
+    let text: Vec<u16> = "Strata is already running — look for its icon in the system tray.".encode_utf16().chain(std::iter::once(0)).collect();
+    let title: Vec<u16> = "Strata".encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe { MessageBoxW(0, text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONINFORMATION); }
+}
+
 fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> {
+    // Enforce a single running instance — a second launch exits immediately instead
+    // of spawning duplicate tray icons / wallpaper windows fighting over the desktop.
+    if another_instance_running() {
+        log::info!("Another Strata instance is already running — exiting this one.");
+        #[cfg(windows)]
+        notify_already_running();
+        return Ok(());
+    }
+
     let app_state = Arc::new(std::sync::RwLock::new(AppState::default()));
     let (command_tx, command_rx) = channel::<EngineCommand>();
     let running = Arc::new(AtomicBool::new(true));
@@ -1118,46 +1167,49 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         });
     }
 
-    // Check for Asset-Library (Strata-Library) updates: fetch the official repo's
-    // index.toml and compare its library_version to the installed one. Mirrors the
-    // engine check; "DOWNLOAD UPDATE" opens the library repo page (in-app sync is the
-    // deferred library-decoupling work). Unreachable/unpublished repo = up to date.
+    // Asset-Library (Strata-Library) button: discover the latest `library-v*` tag and,
+    // if it's newer than what's installed (or nothing is installed yet), download +
+    // install it from the repo's zipball into %APPDATA%/strata, then refresh the grid.
     {
         let ui_lib = ui.as_weak();
         ui.on_check_for_library_updates(move || {
             let Some(ui) = ui_lib.upgrade() else { return };
-            if ui.get_lib_update_available() {
-                let url = ui.get_lib_update_url().to_string();
-                if url.starts_with("https://") || url.starts_with("http://") {
-                    if let Err(e) = open::that(&url) { log::warn!("Failed to open library page: {}", e); }
-                }
-                return;
-            }
             if ui.get_lib_update_checking() { return; }
             ui.set_lib_update_checking(true);
-            ui.set_lib_update_button_label("CHECKING…".into());
+            ui.set_lib_update_button_label("WORKING…".into());
             let current = config::Config::load().library_version;
+            let installed = controller::library_installed();
             let weak = ui.as_weak();
             std::thread::spawn(move || {
-                let result = check_library_update(&current);
+                // -> Ok(Some(version)) = synced to that version; Ok(None) = already current.
+                let result: Result<Option<String>, String> = (|| {
+                    let (owner, repo, version, tag) = library_sync::latest_library()?;
+                    if !installed || library_sync::is_newer(&version, &current) {
+                        library_sync::sync_library(&owner, &repo, &tag)?;
+                        Ok(Some(version))
+                    } else {
+                        Ok(None)
+                    }
+                })();
                 let _ = slint::invoke_from_event_loop(move || {
                     let Some(ui) = weak.upgrade() else { return };
                     ui.set_lib_update_checking(false);
+                    ui.set_lib_update_available(false);
+                    ui.set_lib_update_button_label("CHECK FOR UPDATES".into());
                     match result {
-                        Ok(Some((ver, url))) => {
-                            ui.set_lib_update_url(url.into());
-                            ui.set_lib_update_available(true);
-                            ui.set_lib_update_version_badge(slint::format!("v{} AVAILABLE", ver));
-                            ui.set_lib_update_button_label("DOWNLOAD UPDATE".into());
+                        Ok(Some(version)) => {
+                            let mut c = config::Config::load();
+                            c.library_version = version.clone();
+                            c.save().ok();
+                            ui.set_lib_update_version_badge(slint::format!("v{} (LATEST)", version));
+                            ui.invoke_refresh_library(); // repopulate the grid from the fetched library
                         }
                         Ok(None) => {
                             ui.set_lib_update_version_badge(slint::format!("v{} (LATEST)", current));
-                            ui.set_lib_update_button_label("CHECK FOR UPDATES".into());
                         }
                         Err(e) => {
-                            log::warn!("Library update check failed: {}", e);
-                            ui.set_lib_update_version_badge("CHECK FAILED".into());
-                            ui.set_lib_update_button_label("CHECK FOR UPDATES".into());
+                            log::warn!("Library sync failed: {}", e);
+                            ui.set_lib_update_version_badge("SYNC FAILED".into());
                         }
                     }
                 });
@@ -2398,8 +2450,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                         ui.set_update_button_label("DOWNLOAD UPDATE".into());
                         any = true;
                     }
-                    if let Ok(Some((ver, url))) = lib {
-                        ui.set_lib_update_url(url.into());
+                    if let Ok(Some(ver)) = lib {
                         ui.set_lib_update_available(true);
                         ui.set_lib_update_version_badge(slint::format!("v{} AVAILABLE", ver));
                         ui.set_lib_update_button_label("DOWNLOAD UPDATE".into());
@@ -2411,10 +2462,50 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         }
     }
 
+    // First-run library fetch: the app ships no wallpapers, so if nothing has been
+    // downloaded yet, pull the latest Strata-Library in the background and refresh
+    // the grid when it lands. A toast (shown immediately, since this runs on the UI
+    // thread) tells the user a one-time download is happening so an empty grid on
+    // first launch doesn't look broken. The result toast is raised via the timer
+    // (`library_fetch_status`) because push_toast isn't Send. (Subsequent updates go
+    // through Settings → Updates.)
+    let library_fetch_status = Arc::new(std::sync::atomic::AtomicU8::new(0)); // 0 idle, 1 ok, 2 fail
+    if !controller::library_installed() {
+        push_toast("Downloading Library", "Fetching the wallpaper library — this happens only once.", false);
+        let weak = ui.as_weak();
+        let status = library_fetch_status.clone();
+        std::thread::spawn(move || {
+            let result: Result<String, String> = (|| {
+                let (owner, repo, version, tag) = library_sync::latest_library()?;
+                library_sync::sync_library(&owner, &repo, &tag)?;
+                Ok(version)
+            })();
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(ui) = weak.upgrade() else { return };
+                match result {
+                    Ok(version) => {
+                        let mut c = config::Config::load();
+                        c.library_version = version.clone();
+                        c.save().ok();
+                        ui.set_lib_update_version_badge(slint::format!("v{} (LATEST)", version));
+                        ui.invoke_refresh_library();
+                        log::info!("Fetched wallpaper library v{}", version);
+                        status.store(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    Err(e) => {
+                        log::warn!("First-run library fetch failed (will retry from Settings): {}", e);
+                        status.store(2, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            });
+        });
+    }
+
     // ── Diagnostics / telemetry / log / tray timer ─────────────────────────
     let ui_handle_timer = ui.as_weak();
     let telemetry_ui = telemetry.clone();
     let update_toast_pending_timer = update_toast_pending.clone();
+    let library_fetch_status_timer = library_fetch_status.clone();
     let timer = slint::Timer::default();
     let logs_model = Rc::new(VecModel::<LogEntry>::from(Vec::new()));
     ui.set_logs(ModelRc::from(logs_model.clone()));
@@ -2513,6 +2604,16 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             && update_toast_pending_timer.swap(false, std::sync::atomic::Ordering::Relaxed)
         {
             push_toast_timer("Updates Available", "Open Settings \u{2192} Updates to get the latest.", false);
+        }
+
+        // ── First-run library fetch result toast ──
+        // Raised here (not from the fetch thread) because push_toast isn't Send.
+        if ui_visible_timer.get() {
+            match library_fetch_status_timer.swap(0, std::sync::atomic::Ordering::Relaxed) {
+                1 => push_toast_timer("Library Ready", "Your wallpaper library has been downloaded.", false),
+                2 => push_toast_timer("Library Download Failed", "Couldn't fetch the library \u{2014} check your connection, then retry in Settings \u{2192} Updates.", true),
+                _ => {}
+            }
         }
 
         // ── GPU device-loss recovery ──
@@ -2968,12 +3069,15 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                     }
                 }
                 WindowEvent::Focused(true) => {
-                    // Windows often does NOT emit Occluded for a taskbar minimize, so a
-                    // window restored from the taskbar can come back blank/transparent.
-                    // Regaining focus is the reliable signal for that restore — force the
-                    // same full-repaint nudge (skipped when maximized, so no shift).
+                    // Some taskbar minimize/restore cycles signal only via focus (no
+                    // Occluded). Only force the full-repaint nudge if we believed the
+                    // window was hidden (a genuine restore) — NOT on every focus gain,
+                    // which would cause a 2px resize flicker on normal alt-tab/click.
                     win.request_redraw();
-                    needs_repaint_evt.set(true);
+                    if !ui_visible_evt.get() {
+                        needs_repaint_evt.set(true);
+                    }
+                    ui_visible_evt.set(true);
                 }
                 WindowEvent::Moved(_) => {
                     // Debounced in the timer — a move can reveal stale (unpainted) regions.
@@ -3061,39 +3165,17 @@ fn check_github_latest() -> Result<Option<(String, String)>, String> {
     }
 }
 
-/// Check the official content repository for a newer asset-library version: fetch
-/// `<repo>/index.toml` and read its `library_version`. Returns `Ok(Some((version,
-/// repo_page_url)))` if newer than `current`, else `Ok(None)`. Run off the UI thread.
-fn check_library_update(current: &str) -> Result<Option<(String, String)>, String> {
-    let base = controller::official_repo_url().ok_or("no content repository configured")?;
-    let url = format!("{}/index.toml", base.trim_end_matches('/'));
-    match ureq::get(&url).set("User-Agent", "Strata-Updater").timeout(std::time::Duration::from_secs(10)).call() {
-        Ok(r) => {
-            let body = r.into_string().map_err(|e| e.to_string())?;
-            let remote = body.lines().find_map(|l| {
-                let l = l.trim();
-                l.strip_prefix("library_version")
-                    .and_then(|r| r.trim_start().strip_prefix('='))
-                    .map(|v| v.trim().trim_matches('"').to_string())
-            }).ok_or("index.toml has no library_version")?;
-            if is_newer_version(&remote, current) {
-                Ok(Some((remote, library_page_url(&base))))
-            } else {
-                Ok(None)
-            }
-        }
-        Err(ureq::Error::Status(404, _)) => Ok(None), // repo/tag not published yet
-        Err(e) => Err(e.to_string()),
+/// Check the official content repository for a newer asset-library version by
+/// querying its `library-v*` git tags (see `library_sync::latest_library`). Returns
+/// `Ok(Some(version))` if the latest tag is newer than `current`, else `Ok(None)`.
+/// Run off the UI thread.
+fn check_library_update(current: &str) -> Result<Option<String>, String> {
+    let (_owner, _repo, version, _tag) = library_sync::latest_library()?;
+    if library_sync::is_newer(&version, current) {
+        Ok(Some(version))
+    } else {
+        Ok(None)
     }
-}
-
-/// Derive the human GitHub page from a jsDelivr `gh/<owner>/<repo>@<tag>` base URL.
-fn library_page_url(cdn: &str) -> String {
-    if let Some(rest) = cdn.split("/gh/").nth(1) {
-        let path = rest.split('@').next().unwrap_or(rest).trim_end_matches('/');
-        return format!("https://github.com/{}", path);
-    }
-    "https://github.com/BadassBaboon/Strata-Library".to_string()
 }
 
 /// Parse a `vMAJOR.MINOR.PATCH`(-ish) string into a comparable tuple.
@@ -3326,20 +3408,31 @@ fn now_hms() -> String {
 
 #[cfg(target_os = "windows")]
 fn load_tray_icon(is_dark: bool) -> tray_icon::Icon {
-    let (icon_rgba, icon_width, icon_height) = {
-        let name = if is_dark { "app-icon_dark.png" } else { "app-icon_light.png" };
-        let path = if std::path::Path::new("assets").join(name).exists() {
-            std::path::Path::new("assets").join(name)
-        } else {
-            std::path::Path::new("../../assets").join(name)
-        };
-        let image = image::open(path).expect("Failed to open icon path")
-            .into_rgba8();
-        let (width, height) = image.dimensions();
-        let rgba = image.into_raw();
-        (rgba, width, height)
+    let name = if is_dark { "app-icon_dark.png" } else { "app-icon_light.png" };
+    let path = if std::path::Path::new("assets").join(name).exists() {
+        std::path::Path::new("assets").join(name)
+    } else {
+        std::path::Path::new("../../assets").join(name)
     };
-    tray_icon::Icon::from_rgba(icon_rgba, icon_width, icon_height).expect("Failed to open icon")
+    // Load the real icon, but NEVER panic: a missing/corrupt asset falls back to a
+    // small solid accent square so the tray still appears and the app starts.
+    let (icon_rgba, icon_width, icon_height) = match image::open(&path) {
+        Ok(img) => {
+            let img = img.into_rgba8();
+            let (w, h) = img.dimensions();
+            (img.into_raw(), w, h)
+        }
+        Err(e) => {
+            log::warn!("Tray icon {:?} unavailable ({}); using fallback square.", path, e);
+            let mut px = Vec::with_capacity(16 * 16 * 4);
+            for _ in 0..16 * 16 { px.extend_from_slice(&[0x4f, 0x8a, 0xf7, 0xff]); }
+            (px, 16u32, 16u32)
+        }
+    };
+    tray_icon::Icon::from_rgba(icon_rgba, icon_width, icon_height).unwrap_or_else(|e| {
+        log::error!("Tray icon build failed ({}); using 1x1 fallback.", e);
+        tray_icon::Icon::from_rgba(vec![0, 0, 0, 0], 1, 1).expect("1x1 transparent icon")
+    })
 }
 
 #[derive(Parser, Debug)]
