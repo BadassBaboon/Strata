@@ -641,6 +641,38 @@ fn another_instance_running() -> bool {
 #[cfg(not(windows))]
 fn another_instance_running() -> bool { false }
 
+/// Reads the *actual* autostart state from the registry: whether a value named
+/// "Strata" exists under HKCU\...\Run. This is the source of truth so the in-app
+/// toggle reflects reality regardless of who created the entry — the installer's
+/// "Start with Windows" option, the app's own toggle (`auto_launch`, same value
+/// name), or a hand edit. Format-independent: we only check the value exists, and
+/// `auto_launch.disable()` removes it by the same name, so the two stay in sync.
+#[cfg(windows)]
+fn autostart_is_enabled() -> bool {
+    use windows_sys::Win32::System::Registry::{
+        RegOpenKeyExW, RegQueryValueExW, RegCloseKey, HKEY, HKEY_CURRENT_USER, KEY_READ,
+    };
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    unsafe {
+        let subkey: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+            .encode_utf16().chain(std::iter::once(0)).collect();
+        let value: Vec<u16> = "Strata".encode_utf16().chain(std::iter::once(0)).collect();
+        let mut hkey: HKEY = 0;
+        if RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_READ, &mut hkey) != ERROR_SUCCESS {
+            return false;
+        }
+        let res = RegQueryValueExW(
+            hkey, value.as_ptr(),
+            std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(),
+        );
+        RegCloseKey(hkey);
+        res == ERROR_SUCCESS
+    }
+}
+
+#[cfg(not(windows))]
+fn autostart_is_enabled() -> bool { false }
+
 /// Best-effort: tell the user (who just double-clicked the exe) that Strata is
 /// already running in the tray, so a silent no-op isn't confusing.
 #[cfg(windows)]
@@ -680,7 +712,20 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     };
 
     // Load configuration
-    let config = config::Config::load();
+    let mut config = config::Config::load();
+
+    // Reconcile the autostart flag with the real registry state. The installer can
+    // create the Run entry ("Start with Windows" option) and the user can toggle it
+    // in-app or by hand — the registry is authoritative, so sync config to it on
+    // every launch (and persist) so the Settings toggle never lies.
+    #[cfg(windows)]
+    {
+        let actual = autostart_is_enabled();
+        if actual != config.autostart {
+            config.autostart = actual;
+            config.save().ok();
+        }
+    }
 
     // Shared, live-tunable frame-rate cap read by every monitor render loop.
     // The Settings slider stores into this; render threads pick it up next frame.
@@ -3407,13 +3452,26 @@ fn now_hms() -> String {
 }
 
 #[cfg(target_os = "windows")]
+/// Resolve a bundled asset by name, anchored to the EXECUTABLE's directory — never
+/// the current working directory. This matters for autostart: the Run-key launch at
+/// boot has CWD = System32 (not the install dir), so a CWD-relative `assets/…` lookup
+/// failed and the tray icon fell back to a solid square. Tries the installed layout
+/// (assets next to the exe) then the dev layout (repo `assets/` two levels up from
+/// target/release), with a final CWD-relative fallback.
+fn asset_path(name: &str) -> std::path::PathBuf {
+    if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        let installed = dir.join("assets").join(name);
+        if installed.exists() { return installed; }
+        let dev = dir.join("..").join("..").join("assets").join(name);
+        if dev.exists() { return dev; }
+    }
+    let cwd = std::path::Path::new("assets").join(name);
+    if cwd.exists() { cwd } else { std::path::Path::new("../../assets").join(name) }
+}
+
 fn load_tray_icon(is_dark: bool) -> tray_icon::Icon {
     let name = if is_dark { "app-icon_dark.png" } else { "app-icon_light.png" };
-    let path = if std::path::Path::new("assets").join(name).exists() {
-        std::path::Path::new("assets").join(name)
-    } else {
-        std::path::Path::new("../../assets").join(name)
-    };
+    let path = asset_path(name);
     // Load the real icon, but NEVER panic: a missing/corrupt asset falls back to a
     // small solid accent square so the tray still appears and the app starts.
     let (icon_rgba, icon_width, icon_height) = match image::open(&path) {

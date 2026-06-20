@@ -4,6 +4,10 @@
 
 Strata bypasses the heavy resource footprints of traditional web-based wallpaper utilities by executing GLSL shaders directly on native graphics APIs (DirectX 12, Vulkan, and Metal) via `wgpu`. A decoupled rendering core paired with a native Slint configuration interface delivers fluid, audio-reactive, multi-monitor desktops at a fraction of the memory and CPU overhead. Strata ships with a curated selection of shaders ported from Shadertoy.com.
 
+![Strata screenshot](assets/screenshot-1.jpg)
+
+![Strata screenshot](assets/screenshot-2.jpg)
+
 ---
 
 ## ✨ Features

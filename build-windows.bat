@@ -217,6 +217,8 @@ copy /y "%OUTPUT_DIR%strata-desktop.exe" "!DIST!\" >nul
 copy /y "%OUTPUT_DIR%*.dll" "!DIST!\" >nul 2>nul
 copy /y "repositories.toml" "!DIST!\" >nul 2>nul
 xcopy /e /i /y /q "assets" "!DIST!\assets" >nul
+:: README screenshots live in assets\ for the repo only -- never ship them in the app.
+del /q "!DIST!\assets\screenshot-*.jpg" >nul 2>nul
 echo   Distribution ready: !DIST!  ^(wallpapers are fetched at runtime^) - zip to share
 goto :eof
 
