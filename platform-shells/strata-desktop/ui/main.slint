@@ -1,7 +1,7 @@
 ﻿import { Button, VerticalBox, HorizontalBox, LineEdit, ScrollView, Slider, ComboBox, TextEdit, Palette } from "std-widgets.slint";
 import { Icon, AppLogo } from "icons.slint";
 
-// Bundled fonts — embedded at compile time so "Inter" / "Space Grotesk" /
+// Bundled fonts - embedded at compile time so "Inter" / "Space Grotesk" /
 // "Source Code Pro" resolve without the fonts being installed system-wide.
 import "../../../assets/fonts/inter-v20-latin-regular.ttf";
 import "../../../assets/fonts/inter-v20-latin-500.ttf";
@@ -60,7 +60,7 @@ export global Theme {
     in property <bool>   is-dark: true;
     in property <string> mode:    "dark"; // "dark" | "light" | "system"
 
-    // Typography tokens — registered at startup from assets/fonts/*.ttf.
+    // Typography tokens - registered at startup from assets/fonts/*.ttf.
     out property <string> font-headline: "Space Grotesk";
     out property <string> font-body:     "Inter";
     out property <string> font-code:     "Source Code Pro";
@@ -455,7 +455,7 @@ component IntegrationsSettings inherits VerticalLayout {
     HorizontalLayout {
         spacing: 8px;
         SectionLabel { icon: "puzzle"; text: "INTEGRATIONS"; horizontal-stretch: 1; }
-        // UPCOMING — integrations are planned, hence the panel is greyed/disabled.
+        // UPCOMING - integrations are planned, hence the panel is greyed/disabled.
         Rectangle {
             height: 20px; width: int-up.preferred-width + 18px; border-radius: 6px;
             background: Theme.palette.card-hover;
@@ -516,10 +516,12 @@ component IntegrationsSettings inherits VerticalLayout {
 
 component SystemControlSettings inherits VerticalLayout {
     in property <bool>   autostart;
+    in property <bool>   disable-mpo;
     in property <int>    fps-cap;
     in property <string> shader-quality;
     in property <string> vsync-mode;
     callback autostart-toggled(bool);
+    callback mpo-toggled(bool);
     callback fps-cap-changed(int);
     callback shader-quality-changed(string);
     callback vsync-changed(string);
@@ -544,6 +546,17 @@ component SystemControlSettings inherits VerticalLayout {
                 Text { text: "Auto-start the engine when system boots."; font-size: 12px; color: Theme.palette.text-muted; }
             }
             VerticalLayout { alignment: center; Toggle { checked: root.autostart; toggled(v) => { root.autostart-toggled(v); } } }
+        }
+        Divider {}
+        // Disable MPO (Multi-Plane Overlay)
+        HorizontalLayout {
+            spacing: 16px;
+            VerticalLayout {
+                horizontal-stretch: 1; spacing: 4px;
+                Text { text: "Disable MPO (Multi-Plane Overlay)"; font-size: 15px; font-weight: 700; color: Theme.palette.text; }
+                Text { text: "For NVIDIA users who experience black screenshots or overlay flicker. Can affect FreeSync / G-Sync. Requires admin privileges and a system restart to change."; font-size: 12px; color: Theme.palette.text-muted; wrap: word-wrap; }
+            }
+            VerticalLayout { alignment: center; Toggle { checked: root.disable-mpo; toggled(v) => { root.mpo-toggled(v); } } }
         }
         Divider {}
         // Target FPS
@@ -580,7 +593,7 @@ component SystemControlSettings inherits VerticalLayout {
             }
         }
         Divider {}
-        // Shader Quality — global render-scale preset (Low/Medium/High).
+        // Shader Quality - global render-scale preset (Low/Medium/High).
         VerticalLayout {
             spacing: 12px;
             HorizontalLayout {
@@ -714,7 +727,7 @@ component UpdatesSettings inherits VerticalLayout {
     in property <bool> update-available;
     in property <bool> update-checking;
     callback update-clicked();
-    // Asset Library (Strata-Library) — mirrors the engine row.
+    // Asset Library (Strata-Library) - mirrors the engine row.
     in property <string> lib-version-badge: "v1.0.0 (LATEST)";
     in property <string> lib-update-button-label: "CHECK FOR UPDATES";
     in property <bool> lib-update-available;
@@ -837,7 +850,7 @@ component FpsStatCard inherits StatCard {
     icon-bg: Theme.palette.accent.with-alpha(0.1);
     icon-color: Theme.palette.accent;
     label: "FPS";
-    value: root.active ? "\{Math.round(root.fps)}" : "—";
+    value: root.active ? "\{Math.round(root.fps)}" : "-";
     value-color: !root.active ? Theme.palette.text-muted
                : root.fps >= 50 ? Theme.palette.selection : root.fps >= 25 ? #f59e0b : Theme.palette.danger;
     badge: !root.active ? "INACTIVE" : root.fps >= 50 ? "STABLE" : root.fps >= 25 ? "FAIR" : "LOW";
@@ -902,7 +915,7 @@ component MiniBtn inherits Rectangle {
     ta := TouchArea { clicked => { root.clicked(); } mouse-cursor: pointer; }
 }
 
-// Spatial monitor canvas — positions each display to scale, supports select,
+// Spatial monitor canvas - positions each display to scale, supports select,
 // per-monitor rename/color, refresh, and the span switch.
 component CompositorCanvas inherits Rectangle {
     in property <[MonitorItem]> monitors;
@@ -1088,7 +1101,7 @@ component CompositorCanvas inherits Rectangle {
         clip: true;
     }
 
-    // Bounding box — a SIBLING of the frame (canvas coords) so it always renders
+    // Bounding box - a SIBLING of the frame (canvas coords) so it always renders
     // on top and is never clipped, even when the frame fills a maximized window.
     if root.editing : Rectangle {
         x: root.em-x0 + root.edit-x * root.em-scale * 1px;
@@ -1152,7 +1165,7 @@ component CompositorCanvas inherits Rectangle {
         }
     }
 
-    // Edit toolbar (Save / Discard) — buttons vertically centered in the bar.
+    // Edit toolbar (Save / Discard) - buttons vertically centered in the bar.
     if root.editing : Rectangle {
         x: (parent.width - tb-row.preferred-width - 32px) / 2; y: parent.height - 66px;
         height: 46px; width: tb-row.preferred-width + 32px; border-radius: 14px;
@@ -1190,7 +1203,7 @@ component CompositorCanvas inherits Rectangle {
 }
 
 // Per-monitor shader layer stack (right panel).
-// The stacked layer cards (no scroll of its own — the host decides).
+// The stacked layer cards (no scroll of its own - the host decides).
 component LayerList inherits VerticalLayout {
     in property <[LayerItem]> layers;
     callback move-up(int);
@@ -1296,7 +1309,7 @@ component LayerStack inherits VerticalLayout {
     if root.scrollable : ScrollView {
         vertical-stretch: 1;
         // Inline width-constrained wrapper (reserves the scrollbar gutter + lets the
-        // ScrollView size the content) — same pattern the other tabs use.
+        // ScrollView size the content) - same pattern the other tabs use.
         VerticalLayout {
             width: root.width - 26px;
             LayerList {
@@ -1366,7 +1379,7 @@ component WallpaperCard inherits Rectangle {
         // â"€â"€ Preview band (16:10) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
         Rectangle {
             height: root.width * 10 / 16;
-            // Full-bleed thumbnail with SHARP top corners — the card's top edge is sharp
+            // Full-bleed thumbnail with SHARP top corners - the card's top edge is sharp
             // too (only its bottom corners are rounded), so the square image fits flush.
             // This sidesteps the software renderer's inability to round-clip a child image.
             clip: true;
@@ -1413,7 +1426,7 @@ component WallpaperCard inherits Rectangle {
             HorizontalLayout {
                 x: parent.width - self.preferred-width - 12px; y: 12px; spacing: 6px;
 
-                // Delete — for user-generated cards: Parallax Studio creations and
+                // Delete - for user-generated cards: Parallax Studio creations and
                 // imported Shadertoy shaders.
                 if is-parallax || is-imported : Rectangle {
                     width: 32px; height: 32px; border-radius: 10px;
@@ -1426,7 +1439,7 @@ component WallpaperCard inherits Rectangle {
                 }
 
                 // Asset-type badge: blue sparkles for Parallax, the shader "zap"
-                // otherwise — tinted RED when the shader was imported from Shadertoy.
+                // otherwise - tinted RED when the shader was imported from Shadertoy.
                 Rectangle {
                     width: 32px; height: 32px; border-radius: 10px;
                     background: is-parallax ? #3b82f633 : (is-imported ? #ef444433 : #00000066);
@@ -1481,7 +1494,7 @@ component WallpaperCard inherits Rectangle {
                 }
                 // Tag chips: rounded "#tag" pills (clipped to one row).
                 // Always present at a fixed height so every card is the SAME
-                // total height — otherwise the per-column stacks misalign into a
+                // total height - otherwise the per-column stacks misalign into a
                 // staircase instead of a neat grid.
                 Rectangle {
                     height: 20px; clip: true;
@@ -1592,7 +1605,7 @@ component WallpaperCard inherits Rectangle {
         }
     }
 
-    // Active/selected outline — drawn LAST so it sits ON TOP of the thumbnail.
+    // Active/selected outline - drawn LAST so it sits ON TOP of the thumbnail.
     // (The software renderer composites a child image over the parent's border,
     // unlike femtovg, so the border must be its own top-most overlay.) Matches the
     // card shape: sharp top, rounded bottom.
@@ -1608,7 +1621,7 @@ component WallpaperCard inherits Rectangle {
 
 // ── Parallax Studio ─────────────────────────────────────────────────────────
 // Ported from the ui-prototype ParallaxStudio. All controls are visual stubs
-// (local state only) — backend depth/parallax wiring comes later.
+// (local state only) - backend depth/parallax wiring comes later.
 
 // Slider row: label + live value badge + accent slider (local stub value).
 component KineSlider inherits VerticalLayout {
@@ -1638,7 +1651,7 @@ component KineSlider inherits VerticalLayout {
     }
     AccentSlider {
         minimum: root.minimum; maximum: root.maximum; value: root.value;
-        // NOTE: do NOT self-assign `root.value = v` here — that overwrites the
+        // NOTE: do NOT self-assign `root.value = v` here - that overwrites the
         // parent's `value: …` binding, so later external updates (e.g. the Reset
         // button setting params back to defaults) would no longer move the slider.
         // The owner updates `value` via the round-trip in `changed`, keeping the
@@ -1709,7 +1722,7 @@ component ParallaxControls inherits VerticalLayout {
     callback param-changed(string, float);
     spacing: 24px;
 
-    // Section 1 — Asset pipeline
+    // Section 1 - Asset pipeline
     VerticalLayout {
         spacing: 14px;
         SectionLabel { icon: "layers"; text: "ASSET PIPELINE"; }
@@ -1749,7 +1762,7 @@ component ParallaxControls inherits VerticalLayout {
                 }
             }
 
-            // ── AUTOMATIC — one Quality Preset bundles depth + matte + upscaler ──
+            // ── AUTOMATIC - one Quality Preset bundles depth + matte + upscaler ──
             if root.mode == "automatic" : VerticalLayout {
                 spacing: 8px;
                 Text { text: "QUALITY PRESET"; font-size: 10px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
@@ -1771,7 +1784,7 @@ component ParallaxControls inherits VerticalLayout {
                 }
             }
 
-            // ── MANUAL — individual model dropdowns ──
+            // ── MANUAL - individual model dropdowns ──
             if root.mode == "manual" : VerticalLayout {
                 spacing: 8px;
                 Text { text: "DEPTH ESTIMATOR MODEL"; font-size: 10px; font-weight: 700; letter-spacing: 2px; color: Theme.palette.text-muted; }
@@ -1826,7 +1839,7 @@ component ParallaxControls inherits VerticalLayout {
         }
     }
 
-    // Manual tuning — purpose-built knobs for our depth-parallax shader. They bake into
+    // Manual tuning - purpose-built knobs for our depth-parallax shader. They bake into
     // the wallpaper's shader; the sliders re-bake it LIVE (reusing the cached depth +
     // inpaint), so changes preview instantly without re-running the models.
     if root.mode == "manual" : VerticalLayout {
@@ -1891,7 +1904,7 @@ component ParallaxControls inherits VerticalLayout {
                 }
             }
             Text {
-                text: "Planned: detect your PC's hardware and pick the optimal quality preset automatically. Not available yet — choose a Quality Preset manually for now.";
+                text: "Planned: detect your PC's hardware and pick the optimal quality preset automatically. Not available yet - choose a Quality Preset manually for now.";
                 font-size: 11px; color: Theme.palette.text-muted; horizontal-alignment: center; wrap: word-wrap;
             }
             // Disabled until spec-based auto-preset selection ships (see UPCOMING above).
@@ -2053,13 +2066,13 @@ component ParallaxStudio inherits Rectangle {
     property <string> render-label: root.busy ? "WORKING…" : (root.has-preview ? "RE-RENDER" : "RENDER");
 
     // ── Wide: 400px control sidebar + stretching preview ──
-    // (A layout auto-fills its Rectangle parent — no explicit 100% needed; an
+    // (A layout auto-fills its Rectangle parent - no explicit 100% needed; an
     //  explicit 100% against the not-yet-sized parent can collapse to preferred.)
     if root.wide : HorizontalLayout {
         spacing: 24px;
         Rectangle {
             // Sidebar widened so the cards keep their full width AND there's a
-            // 34px scrollbar gutter (422 − 388), matching the Compositor's inset —
+            // 34px scrollbar gutter (422 − 388), matching the Compositor's inset -
             // the preview just takes the remaining width. The render/save buttons
             // span the full sidebar (full-width actions, by design).
             width: 422px;
@@ -2181,7 +2194,7 @@ component ParallaxStudio inherits Rectangle {
             name-col := VerticalLayout {
                 padding: 24px; spacing: 14px;
                 Text { text: "Name your wallpaper"; font-size: 16px; font-weight: 700; color: Theme.palette.text; }
-                Text { text: "Optional — leave blank to use the image's file name."; font-size: 12px; color: Theme.palette.text-muted; wrap: word-wrap; }
+                Text { text: "Optional - leave blank to use the image's file name."; font-size: 12px; color: Theme.palette.text-muted; wrap: word-wrap; }
                 name-input := BlueInput { placeholder: "My Parallax Wallpaper"; }
                 HorizontalLayout {
                     spacing: 12px; alignment: end;
@@ -2233,7 +2246,7 @@ component ToastCard inherits Rectangle {
     drop-shadow-blur: 18px;
     drop-shadow-offset-y: 6px;
     // Subtle entrance fade (the y is owned by the stack layout, so we can't
-    // animate position here — opacity alone reads cleanly).
+    // animate position here - opacity alone reads cleanly).
     opacity: 0;
     init => { self.opacity = 1; }
     animate opacity { duration: 180ms; easing: ease-out; }
@@ -2284,7 +2297,7 @@ export component AppWindow inherits Window {
     // Keep the std-widgets palette (used by ScrollView scrollbars) in sync with
     // our custom theme, so scrollbars are visible/correct in both light & dark.
     // (Palette accent colors are read-only here, so std widgets we want fully
-    // themed — e.g. the name-input field — are custom components instead.)
+    // themed - e.g. the name-input field - are custom components instead.)
     property <bool> is-dark-tracker: Theme.is-dark;
     init => { Palette.color-scheme = Theme.is-dark ? ColorScheme.dark : ColorScheme.light; }
     changed is-dark-tracker => { Palette.color-scheme = self.is-dark-tracker ? ColorScheme.dark : ColorScheme.light; }
@@ -2320,6 +2333,7 @@ export component AppWindow inherits Window {
     in-out property <bool> span-monitors:  false;
     in-out property <bool> debug-overlay:  false;
     in-out property <bool> autostart:      false;
+    in-out property <bool> disable-mpo:    false;
     in-out property <int>  fps-cap:        60;
     in-out property <string> vsync-mode:     "Fifo (VSync On)";
     in-out property <string> shader-quality: "High (Maximum Fidelity)";
@@ -2350,7 +2364,7 @@ export component AppWindow inherits Window {
     in-out property <bool> update-available;
     in-out property <bool> update-checking;
     callback check-for-updates();
-    // Asset Library (Strata-Library) update state — mirrors the engine's.
+    // Asset Library (Strata-Library) update state - mirrors the engine's.
     in-out property <string> lib-update-version-badge: "v1.0.0 (LATEST)";
     in-out property <string> lib-update-button-label: "CHECK FOR UPDATES";
     in-out property <string> lib-update-url;
@@ -2412,6 +2426,7 @@ export component AppWindow inherits Window {
     callback span-toggled(bool);
     callback debug-toggled(bool);
     callback autostart-toggled(bool);
+    callback mpo-toggled(bool);
     callback vsync-changed(string);
     callback fps-cap-changed(int);
     callback shader-quality-changed(string);
@@ -2636,7 +2651,7 @@ export component AppWindow inherits Window {
                         VerticalLayout {
                             // Constrain content to the viewport width (minus the
                             // scrollbar gutter) so columns share exactly the
-                            // available space — never overflow into a horizontal
+                            // available space - never overflow into a horizontal
                             // scrollbar / clipped cards at small window sizes.
                             width: grid-area.width - 26px;
                             padding: 4px;
@@ -2774,7 +2789,7 @@ export component AppWindow inherits Window {
                 }
 
                 // Narrow: canvas on top (fixed height), layer panel scrolling below.
-                // The canvas must stay OUTSIDE the ScrollView — a Flickable captures
+                // The canvas must stay OUTSIDE the ScrollView - a Flickable captures
                 // pointer drags, which would steal the edit-overlay's move/resize
                 // gestures (the bug that made editing only work in the wide layout).
                 if !comp-area.wide : VerticalLayout {
@@ -2810,7 +2825,7 @@ export component AppWindow inherits Window {
                             width: comp-area.width - 34px;
                             padding: 4px;
                             LayerStack {
-                                // No inner scroll — this ScrollView handles it.
+                                // No inner scroll - this ScrollView handles it.
                                 scrollable: false;
                                 layers: root.layers;
                                 monitor-name: root.selected-monitor-index >= 0 ? root.monitors[root.selected-monitor-index].name : "No display selected";
@@ -2856,9 +2871,10 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 horizontal-stretch: 5; spacing: 24px; alignment: start;
                                 SystemControlSettings {
-                                    autostart: root.autostart; fps-cap: root.fps-cap;
+                                    autostart: root.autostart; disable-mpo: root.disable-mpo; fps-cap: root.fps-cap;
                                     shader-quality: root.shader-quality; vsync-mode: root.vsync-mode;
                                     autostart-toggled(v) => { root.autostart = v; root.autostart-toggled(v); }
+                                    mpo-toggled(v) => { root.disable-mpo = v; root.mpo-toggled(v); }
                                     fps-cap-changed(v) => { root.fps-cap = v; root.fps-cap-changed(v); }
                                     shader-quality-changed(v) => { root.shader-quality = v; root.shader-quality-changed(v); }
                                     vsync-changed(v) => { root.vsync-mode = v; root.vsync-changed(v); }
@@ -2891,9 +2907,10 @@ export component AppWindow inherits Window {
                             spacing: 24px; alignment: start;
                             AppearanceSettings { theme-changed(m) => { root.theme-changed(m); } }
                             SystemControlSettings {
-                                autostart: root.autostart; fps-cap: root.fps-cap;
+                                autostart: root.autostart; disable-mpo: root.disable-mpo; fps-cap: root.fps-cap;
                                 shader-quality: root.shader-quality; vsync-mode: root.vsync-mode;
                                 autostart-toggled(v) => { root.autostart = v; root.autostart-toggled(v); }
+                                mpo-toggled(v) => { root.disable-mpo = v; root.mpo-toggled(v); }
                                 fps-cap-changed(v) => { root.fps-cap = v; root.fps-cap-changed(v); }
                                 shader-quality-changed(v) => { root.shader-quality = v; root.shader-quality-changed(v); }
                                 vsync-changed(v) => { root.vsync-mode = v; root.vsync-changed(v); }
@@ -2940,14 +2957,14 @@ export component AppWindow inherits Window {
                         width: diag-area.width - 26px;
                         padding: 4px; spacing: 24px;
 
-                        // Telemetry stat cards — 4-up on wide windows, 2x2 when narrow.
+                        // Telemetry stat cards - 4-up on wide windows, 2x2 when narrow.
                         if root.width >= 1180px : HorizontalLayout {
                             spacing: 24px; alignment: start;
                             FpsStatCard { width: diag-area.cw4; fps: root.fps; active: root.engine-active; }
                             StatCard {
                                 width: diag-area.cw4;
                                 icon: "clock"; icon-bg: #38bdf81f; icon-color: #38bdf8;
-                                label: "FRAME TIME"; value: root.engine-active ? "\{Math.round(root.frame-time * 10) / 10}" : "—"; unit: root.engine-active ? "ms" : "";
+                                label: "FRAME TIME"; value: root.engine-active ? "\{Math.round(root.frame-time * 10) / 10}" : "-"; unit: root.engine-active ? "ms" : "";
                             }
                             StatCard {
                                 width: diag-area.cw4;
@@ -2968,7 +2985,7 @@ export component AppWindow inherits Window {
                                 StatCard {
                                     width: diag-area.cw2;
                                     icon: "clock"; icon-bg: #38bdf81f; icon-color: #38bdf8;
-                                    label: "FRAME TIME"; value: root.engine-active ? "\{Math.round(root.frame-time * 10) / 10}" : "—"; unit: root.engine-active ? "ms" : "";
+                                    label: "FRAME TIME"; value: root.engine-active ? "\{Math.round(root.frame-time * 10) / 10}" : "-"; unit: root.engine-active ? "ms" : "";
                                 }
                             }
                             HorizontalLayout {
@@ -2987,7 +3004,7 @@ export component AppWindow inherits Window {
                         }
 
                         // Diagnostics log panel.  Its height is the space left below
-                        // the stat cards, but never less than 360px — so on a tall
+                        // the stat cards, but never less than 360px - so on a tall
                         // window it fills, and on the small default window it keeps a
                         // readable height that pushes the content past the viewport,
                         // making the outer ScrollView scroll (instead of clipping).
@@ -3050,7 +3067,7 @@ export component AppWindow inherits Window {
 
     // ── Toast overlay ───────────────────────────────────────────────────────
     // Floats above everything, anchored bottom-right. Plain Rectangles don't
-    // grab pointer input, so only the toast close buttons are interactive — the
+    // grab pointer input, so only the toast close buttons are interactive - the
     // rest of the UI underneath stays fully usable.
     Rectangle {
         width: 100%; height: 100%;
