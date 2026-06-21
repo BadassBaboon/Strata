@@ -21,8 +21,6 @@ Strata bypasses the heavy resource footprints of traditional web-based wallpaper
 * **Wallpaper library** - scans local shader packages, tag-based search and filtering, safe import of Shadertoy exports and native `.zip` packs (zip-slip protected), per-creation delete for Parallax / imported wallpapers, clickable "Made by …" attribution links, and automatic thumbnail generation: missing previews are rendered headlessly (with synthetic audio for visualizers) and saved as `thumbnail.png` inside each self-contained pack.
 * **Automatic update checks** - a weekly background check compares the running build against the latest GitHub release **and** the live asset-library version, surfacing a toast and a one-click "Download Update" in Settings when either is newer.
 * **Native Slint UI** - dark/light/follow-system theming, system tray with theme-aware icons, close-to-tray, autostart that boots straight to the tray (no window pop-up on login), global render-quality (resolution-scale) preset, diagnostics dashboard (FPS, frame time, VRAM estimate), a live shader-compile log, and a Discord community link.
-* **Robust by design** - panic-safe shader compilation with source-mapped, human-readable error messages (user line numbers, not preprocessed ones); GPU device-loss (TDR) detection with automatic recovery; configuration persisted as TOML in OS-correct per-user directories.
-
 ---
 
 ## ✨ Project Goals & Philosophy
