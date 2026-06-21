@@ -722,13 +722,13 @@ component UpdatesSettings inherits VerticalLayout {
     // ("CHECK FOR UPDATES" / "CHECKING…" / "DOWNLOAD UPDATE"), whether a newer
     // release was found (changes the accent), and a busy flag. `update-clicked`
     // is handled in Rust (it either runs the check or opens the releases page).
-    in property <string> version-badge: "v1.0.0 (LATEST)";
+    in property <string> version-badge: "v1.1.0 (LATEST)";
     in property <string> update-button-label: "CHECK FOR UPDATES";
     in property <bool> update-available;
     in property <bool> update-checking;
     callback update-clicked();
     // Asset Library (Strata-Library) - mirrors the engine row.
-    in property <string> lib-version-badge: "v1.0.0 (LATEST)";
+    in property <string> lib-version-badge: "v1.1.0 (LATEST)";
     in property <string> lib-update-button-label: "CHECK FOR UPDATES";
     in property <bool> lib-update-available;
     in property <bool> lib-update-checking;
@@ -2358,14 +2358,14 @@ export component AppWindow inherits Window {
     callback open-url(string);
     // Updates: GitHub-release check. Rust sets the badge/label/flags; the button
     // either runs the check or (when an update is available) opens the releases page.
-    in-out property <string> update-version-badge: "v1.0.0 (LATEST)";
+    in-out property <string> update-version-badge: "v1.1.0 (LATEST)";
     in-out property <string> update-button-label: "CHECK FOR UPDATES";
     in-out property <string> update-url;          // latest release page (when available)
     in-out property <bool> update-available;
     in-out property <bool> update-checking;
     callback check-for-updates();
     // Asset Library (Strata-Library) update state - mirrors the engine's.
-    in-out property <string> lib-update-version-badge: "v1.0.0 (LATEST)";
+    in-out property <string> lib-update-version-badge: "v1.1.0 (LATEST)";
     in-out property <string> lib-update-button-label: "CHECK FOR UPDATES";
     in-out property <string> lib-update-url;
     in-out property <bool> lib-update-available;
