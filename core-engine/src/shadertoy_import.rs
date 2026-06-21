@@ -64,6 +64,15 @@ struct StInput {
     id: serde_json::Value,
     #[serde(default)]
     filepath: String,
+    #[serde(default)]
+    sampler: StSampler,
+}
+
+#[derive(Deserialize, Default)]
+struct StSampler {
+    /// "clamp" or "repeat" (others fall back to repeat). Fluid/feedback sims need clamp.
+    #[serde(default)]
+    wrap: String,
 }
 
 #[derive(Deserialize)]
@@ -191,14 +200,20 @@ pub fn convert_shadertoy(
                 warnings.push(format!("{pass_name}: ignoring input on channel {} (>3)", inp.channel));
                 continue;
             }
+            // Preserve a clamp wrap mode (fluid/feedback sims need it); repeat is the default.
+            let wrap_attr = if inp.sampler.wrap.eq_ignore_ascii_case("clamp") {
+                ", wrap = \"clamp\""
+            } else {
+                ""
+            };
             match inp.itype.as_str() {
                 "texture" => {
                     let base = basename(&inp.filepath)
                         .ok_or_else(|| format!("{pass_name}: texture input has no filepath"))?;
                     require_asset(&base)?;
                     bindings.push(format!(
-                        "    {{ channel = {}, type = \"texture\", path = \"{}\" }}",
-                        inp.channel, base
+                        "    {{ channel = {}, type = \"texture\", path = \"{}\"{} }}",
+                        inp.channel, base, wrap_attr
                     ));
                 }
                 "cubemap" => {
@@ -206,16 +221,16 @@ pub fn convert_shadertoy(
                         .ok_or_else(|| format!("{pass_name}: cubemap input has no filepath"))?;
                     require_cubemap(&base)?;
                     bindings.push(format!(
-                        "    {{ channel = {}, type = \"cubemap\", path = \"{}\" }}",
-                        inp.channel, base
+                        "    {{ channel = {}, type = \"cubemap\", path = \"{}\"{} }}",
+                        inp.channel, base, wrap_attr
                     ));
                 }
                 "buffer" => {
                     let key = id_key(&inp.id);
                     if let Some(target) = id_to_pass.get(&key) {
                         bindings.push(format!(
-                            "    {{ channel = {}, type = \"buffer\", target = \"{}\" }}",
-                            inp.channel, target
+                            "    {{ channel = {}, type = \"buffer\", target = \"{}\"{} }}",
+                            inp.channel, target, wrap_attr
                         ));
                     } else {
                         warnings.push(format!(

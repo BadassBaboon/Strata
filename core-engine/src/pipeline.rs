@@ -753,12 +753,12 @@ void main() {
             pass.channel_bind_groups = [
                 Self::create_channel_bind_group(
                     device, &pass.channel_layout, &pass_cfg.bindings,
-                    &self.textures, &self.targets, &self.default_view, &self.default_cube_view, &self.default_sampler,
+                    &self.textures, &self.targets, &self.default_view, &self.default_cube_view, &self.default_sampler, &self.clamp_sampler,
                     self.audio_view.as_ref(), pass_index, &self.config.wallpaper.passes, 0,
                 ),
                 Self::create_channel_bind_group(
                     device, &pass.channel_layout, &pass_cfg.bindings,
-                    &self.textures, &self.targets, &self.default_view, &self.default_cube_view, &self.default_sampler,
+                    &self.textures, &self.targets, &self.default_view, &self.default_cube_view, &self.default_sampler, &self.clamp_sampler,
                     self.audio_view.as_ref(), pass_index, &self.config.wallpaper.passes, 1,
                 ),
             ];
