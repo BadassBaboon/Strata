@@ -30,7 +30,7 @@ pub enum EngineCommand {
     /// Live spatial-edit preview: update one layer's rect without recreating the
     /// pipeline. Routed to the monitor whose id matches.
     SetLayerTransform { monitor_id: String, pipeline_index: usize, transform: [f32; 4] },
-    /// Live opacity update (just a uniform — no pipeline rebuild), routed by id.
+    /// Live opacity update (just a uniform - no pipeline rebuild), routed by id.
     SetLayerOpacity { monitor_id: String, pipeline_index: usize, opacity: f32 },
     #[allow(dead_code)]
     ReloadLibrary,

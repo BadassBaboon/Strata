@@ -159,12 +159,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Render Slint's UI in SOFTWARE (CPU), not on the GPU. Slint's default GPU renderer
     // (FemtoVG→ANGLE/D3D11) is a second GPU presenter; on NVIDIA it conflicts with the
-    // wallpaper windows' wgpu swapchains — when desktop icons are hidden, the UI's GPU
+    // wallpaper windows' wgpu swapchains - when desktop icons are hidden, the UI's GPU
     // present blacks out the primary monitor's wallpaper. The wallpaper content is drawn
     // entirely by our own wgpu surface, so the UI doesn't need the GPU.
     //
     // We tried (2026-06-16) rendering the UI on the SAME wgpu device as the wallpapers to
-    // get GPU UI without the conflict; it failed — two swapchains on one device clash at
+    // get GPU UI without the conflict; it failed - two swapchains on one device clash at
     // DXGI swapchain creation ("Access is denied"), because the wallpaper swapchain is
     // created cross-thread on a window the shared DXGI factory also drives. See
     // [[gpu-ui-prototype]] in memory. Software is the proven path; it needs the size-nudge
@@ -310,13 +310,13 @@ fn run_cli_mode(wallpaper_dir: String) -> Result<(), Box<dyn std::error::Error>>
 // Tracks every live wallpaper window so they can be closed and recreated when
 // the monitor configuration changes.  The third tuple element is the monitor
 // id, so we can map a monitor → its window for per-monitor teardown.  Rc is
-// fine — accessed only on the Slint main thread (spawn_local, timer callbacks).
+// fine - accessed only on the Slint main thread (spawn_local, timer callbacks).
 type WallpaperWindowStore =
     std::rc::Rc<std::cell::RefCell<Vec<(WallpaperWindow, winit::window::WindowId, String)>>>;
 
 // Wallpaper windows queued for destruction.  When a monitor loses its last
 // shader we send WindowClosed (so the render thread shuts down and releases its
-// surface) but DEFER dropping the Slint component — dropping it destroys the
+// surface) but DEFER dropping the Slint component - dropping it destroys the
 // HWND, and doing that out from under a still-running render thread would race
 // surface.get_current_texture() against a dead window.  The UI timer drops these
 // a few hundred ms later, by which point the render thread has exited.
@@ -373,7 +373,7 @@ fn spawn_wallpaper_windows(
         };
 
         // Obtain the WorkerW handle once for all monitors.
-        // WorkerW is a global shell window — it appears on ALL virtual desktops
+        // WorkerW is a global shell window - it appears on ALL virtual desktops
         // automatically, so our wallpaper children do too.
         #[cfg(target_os = "windows")]
         let wallpaper_parent = platform::windows::get_wallpaper_window();
@@ -403,7 +403,7 @@ fn spawn_wallpaper_windows(
                 continue;
             }
 
-            // Idempotent: this monitor already has a live window — leave it be.
+            // Idempotent: this monitor already has a live window - leave it be.
             if existing.contains(&monitor_id) {
                 continue;
             }
@@ -438,7 +438,7 @@ fn spawn_wallpaper_windows(
                 // native resolution). We intentionally do NOT forward
                 // WindowEvent::Resized here because show(), SW_SHOWNA, and
                 // SetParent all generate WM_SIZE messages that arrive AFTER the
-                // current async task yields — they would overwrite the surface
+                // current async task yields - they would overwrite the surface
                 // config set by initial_size with whatever Windows transiently
                 // reports.  The renderer uses initial_size directly and only
                 // the Renderer::resize() recovery path re-reads the size.
@@ -471,7 +471,7 @@ fn spawn_wallpaper_windows(
                     }
                 }
 
-                // Store window handle — surface creation happens below after Win32 setup.
+                // Store window handle - surface creation happens below after Win32 setup.
                 captured_window = Some(w);
             }
 
@@ -490,7 +490,7 @@ fn spawn_wallpaper_windows(
                     );
                 }
                 (Some(_), None) => {
-                    log::warn!("WorkerW not found — wallpaper at ({},{}) above icons", screen_x, screen_y);
+                    log::warn!("WorkerW not found - wallpaper at ({},{}) above icons", screen_x, screen_y);
                 }
                 _ => {
                     log::error!("No HWND captured for monitor at ({},{})", screen_x, screen_y);
@@ -538,7 +538,7 @@ fn spawn_wallpaper_windows(
                 // so the window can be torn down later when its shader is removed.
                 store.borrow_mut().push((wall_ui, wid, monitor_id));
             } else {
-                // Window creation failed — keep the component alive to avoid
+                // Window creation failed - keep the component alive to avoid
                 // destroying the window mid-initialisation.
                 Box::leak(Box::new(wall_ui));
             }
@@ -614,7 +614,7 @@ fn sync_wallpaper_windows(
 
 /// Returns `true` if another Strata instance already holds the single-instance
 /// lock. Uses a named mutex (per-login-session via the `Local\` namespace) whose
-/// handle is intentionally leaked so it stays open for this process's whole life —
+/// handle is intentionally leaked so it stays open for this process's whole life -
 /// any later instance then sees `ERROR_ALREADY_EXISTS`. Fails open (returns false)
 /// if the mutex can't be created, so a quirk never prevents the app from launching.
 #[cfg(windows)]
@@ -625,7 +625,7 @@ fn another_instance_running() -> bool {
         let name: Vec<u16> = "Local\\Strata-Desktop-SingleInstance".encode_utf16().chain(std::iter::once(0)).collect();
         let handle = CreateMutexW(std::ptr::null(), 1, name.as_ptr());
         if handle == 0 {
-            return false; // couldn't create the lock — allow launch rather than block it
+            return false; // couldn't create the lock - allow launch rather than block it
         }
         if GetLastError() == ERROR_ALREADY_EXISTS {
             CloseHandle(handle);
@@ -643,7 +643,7 @@ fn another_instance_running() -> bool { false }
 
 /// Reads the *actual* autostart state from the registry: whether a value named
 /// "Strata" exists under HKCU\...\Run. This is the source of truth so the in-app
-/// toggle reflects reality regardless of who created the entry — the installer's
+/// toggle reflects reality regardless of who created the entry - the installer's
 /// "Start with Windows" option, the app's own toggle (`auto_launch`, same value
 /// name), or a hand edit. Format-independent: we only check the value exists, and
 /// `auto_launch.disable()` removes it by the same name, so the two stay in sync.
@@ -678,16 +678,16 @@ fn autostart_is_enabled() -> bool { false }
 #[cfg(windows)]
 fn notify_already_running() {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK, MB_ICONINFORMATION};
-    let text: Vec<u16> = "Strata is already running — look for its icon in the system tray.".encode_utf16().chain(std::iter::once(0)).collect();
+    let text: Vec<u16> = "Strata is already running - look for its icon in the system tray.".encode_utf16().chain(std::iter::once(0)).collect();
     let title: Vec<u16> = "Strata".encode_utf16().chain(std::iter::once(0)).collect();
     unsafe { MessageBoxW(0, text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONINFORMATION); }
 }
 
 fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> {
-    // Enforce a single running instance — a second launch exits immediately instead
+    // Enforce a single running instance - a second launch exits immediately instead
     // of spawning duplicate tray icons / wallpaper windows fighting over the desktop.
     if another_instance_running() {
-        log::info!("Another Strata instance is already running — exiting this one.");
+        log::info!("Another Strata instance is already running - exiting this one.");
         #[cfg(windows)]
         notify_already_running();
         return Ok(());
@@ -698,7 +698,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     let running = Arc::new(AtomicBool::new(true));
 
     // Create ONE shared graphics context. Both the main thread (surface creation) and the
-    // renderer thread (adapter / device / queue) must use the same wgpu::Instance — if they
+    // renderer thread (adapter / device / queue) must use the same wgpu::Instance - if they
     // use different instances the adapter IDs are incompatible and wgpu panics.
     let context = {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -716,7 +716,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
 
     // Reconcile the autostart flag with the real registry state. The installer can
     // create the Run entry ("Start with Windows" option) and the user can toggle it
-    // in-app or by hand — the registry is authoritative, so sync config to it on
+    // in-app or by hand - the registry is authoritative, so sync config to it on
     // every launch (and persist) so the Settings toggle never lies.
     #[cfg(windows)]
     {
@@ -975,7 +975,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         })
     };
 
-    // Close (✕) on a toast — drop it from both the model and the expiry list.
+    // Close (✕) on a toast - drop it from both the model and the expiry list.
     {
         let model = toasts_model.clone();
         let expiry = toast_expiry.clone();
@@ -1002,7 +1002,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     let parallax_busy = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (parallax_tx, parallax_rx) = std::sync::mpsc::channel::<Result<String, String>>();
     // Depth-model selection (dropdown label) + on-demand download state.
-    // Manual-mode depth model (defaults to the first real model — no "no model" option).
+    // Manual-mode depth model (defaults to the first real model - no "no model" option).
     let parallax_model: Rc<std::cell::RefCell<String>> = Rc::new(std::cell::RefCell::new(
         parallax::model_options().first().cloned().unwrap_or_default()));
     let parallax_downloading = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1036,7 +1036,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     // shader live (reusing cached depth/inpaint) once dragging settles.
     let parallax_tune_settle: Rc<std::cell::Cell<Option<std::time::Instant>>> =
         Rc::new(std::cell::Cell::new(None));
-    // NOTE: thumbnail generation is deliberately NOT kicked off at startup — we
+    // NOTE: thumbnail generation is deliberately NOT kicked off at startup - we
     // want the lightest possible launch footprint (no extra GPU context, no
     // compile burst) so Strata starts fast alongside the user's other autostart
     // apps. Missing thumbnails are generated only on an explicit Refresh or Import.
@@ -1145,7 +1145,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                 }
                 Err(e) => {
                     log::error!("Import failed: {}", e);
-                    push_toast_import("Import Failed", "Shader couldn't be imported — see logs for details.", true);
+                    push_toast_import("Import Failed", "Shader couldn't be imported - see logs for details.", true);
                 }
             }
         }
@@ -1270,10 +1270,10 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     let thumb_tx_refresh = thumb_tx.clone();
     let thumbnails_busy_refresh = thumbnails_busy.clone();
     ui.on_refresh_library(move || {
-        // Already refreshing? Don't rescan or kick off a second generator — just
+        // Already refreshing? Don't rescan or kick off a second generator - just
         // tell the user. This stops rapid clicks from pinning the CPU.
         if thumbnails_busy_refresh.load(std::sync::atomic::Ordering::SeqCst) {
-            push_toast_refresh("Refresh In Progress", "Thumbnails are still generating — please wait.", false);
+            push_toast_refresh("Refresh In Progress", "Thumbnails are still generating - please wait.", false);
             return;
         }
         let mut state = app_state_refresh.write().unwrap();
@@ -1317,10 +1317,10 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             drop(state);
             wallpapers_model_refresh.set_vec(walls);
             log::info!("Library refreshed: {} wallpaper(s)", count);
-            push_toast_refresh("Library Updated", &format!("Shader manifests synchronized — {} found.", count), false);
+            push_toast_refresh("Library Updated", &format!("Shader manifests synchronized - {} found.", count), false);
         } else {
             drop(state);
-            push_toast_refresh("Library Up To Date", &format!("{} shaders — no changes found.", count), false);
+            push_toast_refresh("Library Up To Date", &format!("{} shaders - no changes found.", count), false);
         }
         // Generate any missing thumbnails in the background (spinner shows progress).
         // No-op if every shader already has one.
@@ -1346,7 +1346,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             // Safety: only delete user-generated content (parallax creations or
             // imported shaders), never the bundled library or anything elsewhere.
             if !controller::is_user_deletable(&path) {
-                log::warn!("Refusing to delete {:?} — not a user-generated wallpaper", path);
+                log::warn!("Refusing to delete {:?} - not a user-generated wallpaper", path);
                 return;
             }
 
@@ -1530,7 +1530,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
 
     // ── Parallax Studio: Manual tuning sliders (height / zoom / steps) ───────
     // Update the baked params + arm a debounced live re-bake (timer reuses the cached
-    // depth/inpaint, so tuning is instant — no model inference).
+    // depth/inpaint, so tuning is instant - no model inference).
     {
         let ui_pc = ui.as_weak();
         let params_pc = parallax_params.clone();
@@ -1725,7 +1725,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     ui.on_apply_to_monitor(move |mon_idx, wall_name| {
         // Applying a shader makes that monitor the Compositor's active selection,
         // so switching tabs shows it selected (and its layers) without an extra
-        // click — keeps the Library and Compositor in sync.
+        // click - keeps the Library and Compositor in sync.
         if let Some(ui) = ui_handle_apply.upgrade() {
             ui.set_selected_monitor_index(mon_idx);
         }
@@ -1751,7 +1751,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                     added = true;
                     // Insert at the TOP of the list (index 0) so the shader the
                     // user just activated composites on top and is immediately
-                    // visible — they can move it down later to reorder.
+                    // visible - they can move it down later to reorder.
                     monitor.layers.insert(0, LayerInfo {
                         wallpaper_path: path,
                         name: name,
@@ -1815,7 +1815,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         } // drop the app_state write guard before reconciling windows
 
         // Assigning the first shader to a monitor (or removing its last one)
-        // can create or destroy that monitor's window — reconcile rather than a
+        // can create or destroy that monitor's window - reconcile rather than a
         // plain Reload.  sync_wallpaper_windows re-reads app_state, so the guard
         // above MUST be released first.
         if changed {
@@ -1889,7 +1889,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
 
         // Removing the last layer tears the monitor's window down (real desktop
         // returns); removing a non-last layer just refreshes it.  Either way,
-        // reconcile — and only after the write guard is released, since
+        // reconcile - and only after the write guard is released, since
         // sync_wallpaper_windows re-reads app_state.
         if changed {
             sync_wallpaper_windows(
@@ -1933,7 +1933,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         // Persist via the debounced flag, not a per-tick disk write.
         config_dirty_op.set(true);
 
-        // Lightweight live update — no pipeline rebuild / shader recompile.
+        // Lightweight live update - no pipeline rebuild / shader recompile.
         if visible {
             command_tx_op.send(EngineCommand::SetLayerOpacity { monitor_id, pipeline_index: pidx, opacity }).ok();
         }
@@ -2001,7 +2001,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                 item.name = name;
                 monitors_model_rename.set_row_data(mon_idx as usize, item);
             }
-            // Per-keystroke from the rename field — debounce the disk write.
+            // Per-keystroke from the rename field - debounce the disk write.
             config_dirty_rename.set(true);
         }
     });
@@ -2226,7 +2226,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             let mut config = config::Config::load();
             config.update_from_state(state.theme_mode.clone(), state.span_monitors, state.autostart, &state.monitors);
             config.save().ok();
-        } // drop the write guard BEFORE invoke_refresh_monitors — that callback
+        } // drop the write guard BEFORE invoke_refresh_monitors - that callback
           // re-acquires the same lock, and std RwLock is not reentrant (the old
           // code held the guard here and deadlocked the whole UI thread).
 
@@ -2306,7 +2306,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         let _ = command_tx_vsync.send(EngineCommand::SetVSync(present_mode));
     });
 
-    // FPS cap slider — store into the shared atomic (render threads pick it up
+    // FPS cap slider - store into the shared atomic (render threads pick it up
     // next frame); persistence is debounced via the dirty flag.
     let target_fps_ui = target_fps.clone();
     let config_dirty_fps = config_dirty.clone();
@@ -2316,7 +2316,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         config_dirty_fps.set(true);
     });
 
-    // Shader Quality preset — maps the label to a global render scale that every
+    // Shader Quality preset - maps the label to a global render scale that every
     // monitor loop picks up live; persistence is debounced via the dirty flag.
     let quality_scale_ui = quality_scale.clone();
     let config_dirty_quality = config_dirty.clone();
@@ -2326,7 +2326,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         config_dirty_quality.set(true);
     });
 
-    // Audio sensitivity slider — retunes the AudioEngine gain live; debounced save.
+    // Audio sensitivity slider - retunes the AudioEngine gain live; debounced save.
     let context_audio = context.clone();
     let audio_sensitivity_ui = audio_sensitivity.clone();
     let config_dirty_audio = config_dirty.clone();
@@ -2337,7 +2337,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         config_dirty_audio.set(true);
     });
 
-    // Mouse interactivity mode — render loops pick it up live.
+    // Mouse interactivity mode - render loops pick it up live.
     let mouse_mode_ui = mouse_mode.clone();
     let config_dirty_mouse = config_dirty.clone();
     ui.on_mouse_mode_changed(move |label| {
@@ -2483,8 +2483,12 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             std::thread::spawn(move || {
                 let app = check_github_latest();
                 let lib = check_library_update(&lib_ver);
-                // Record the check time regardless of outcome.
-                { let mut c = config::Config::load(); c.last_update_check = now; c.save().ok(); }
+                // Only record the check time if we actually reached the network. A failed
+                // attempt (e.g. booted offline) leaves last_update_check untouched so the
+                // next launch retries instead of going quiet for a whole week.
+                if app.is_ok() || lib.is_ok() {
+                    let mut c = config::Config::load(); c.last_update_check = now; c.save().ok();
+                }
                 let _ = slint::invoke_from_event_loop(move || {
                     let Some(ui) = weak.upgrade() else { return };
                     let mut any = false;
@@ -2516,7 +2520,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     // through Settings → Updates.)
     let library_fetch_status = Arc::new(std::sync::atomic::AtomicU8::new(0)); // 0 idle, 1 ok, 2 fail
     if !controller::library_installed() {
-        push_toast("Downloading Library", "Fetching the wallpaper library — this happens only once.", false);
+        push_toast("Downloading Library", "Fetching the wallpaper library - this happens only once.", false);
         let weak = ui.as_weak();
         let status = library_fetch_status.clone();
         std::thread::spawn(move || {
@@ -2565,7 +2569,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     let wallpapers_model_timer = wallpapers_model.clone();
     let app_state_thumb = app_state.clone();
     // The software renderer leaves stale (white/transparent) regions whenever the OS
-    // discards/suspends the window's buffer — tray restore, taskbar un-minimize, or
+    // discards/suspends the window's buffer - tray restore, taskbar un-minimize, or
     // waking a long-dormant window. Forcing a full repaint requires a real resize, so
     // `needs_repaint` (set on those events) makes the timer nudge the size +2px and
     // restore it next tick (two resize events → full repaint). `restore_size` carries
@@ -2574,7 +2578,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     let needs_repaint = std::rc::Rc::new(std::cell::Cell::new(false));
     let needs_repaint_timer = needs_repaint.clone();
     // Tracks whether the main window is actually on-screen (not hidden to tray /
-    // minimized). Used to skip work the user can't see — e.g. the parallax preview's
+    // minimized). Used to skip work the user can't see - e.g. the parallax preview's
     // offscreen GPU render. Updated on tray show/hide and winit Occluded events.
     let ui_visible = std::rc::Rc::new(std::cell::Cell::new(true));
     let ui_visible_timer = ui_visible.clone();
@@ -2586,7 +2590,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     // mid-drag). A resize, by contrast, self-heals (it resets softbuffer's buffer age).
     let move_settle = std::rc::Rc::new(std::cell::Cell::new(None::<std::time::Instant>));
     let move_settle_timer = move_settle.clone();
-    // The repaint nudge resizes the window by a pixel — but a `set_size` on a MAXIMIZED
+    // The repaint nudge resizes the window by a pixel - but a `set_size` on a MAXIMIZED
     // window un-maximizes and repositions it (the "maximize shifts to bottom-right" bug).
     // Maximizing already fires a real resize that self-heals the buffer, so we simply
     // skip the nudge while maximized. Kept current by the winit hook.
@@ -2663,12 +2667,12 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
 
         // ── GPU device-loss recovery ──
         // A lost device (driver TDR/reset, GPU hang, driver update) can't be
-        // revived in place. Persist state and relaunch — Strata restores monitors,
+        // revived in place. Persist state and relaunch - Strata restores monitors,
         // layers and settings from config, so the wallpaper comes back on its own.
         if context_timer.device_lost.load(std::sync::atomic::Ordering::SeqCst)
             && app_start.elapsed() > std::time::Duration::from_secs(20)
         {
-            log::error!("GPU device lost — relaunching Strata to recover the wallpaper");
+            log::error!("GPU device lost - relaunching Strata to recover the wallpaper");
             if let Ok(st) = app_state_timer.read() {
                 flush_config(
                     &st,
@@ -2753,13 +2757,13 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                 ui.set_parallax_busy(false);
                 match res {
                     Ok(name) => {
-                        ui.set_parallax_status(SharedString::from(format!("Created \"{}\" — see the Library.", name)));
+                        ui.set_parallax_status(SharedString::from(format!("Created \"{}\" - see the Library.", name)));
                         push_toast_timer("Parallax Created", "Your 3D wallpaper was added to the Library.", false);
                         ui.invoke_refresh_library(); // rescan so the new wallpaper appears
                     }
                     Err(e) => {
                         log::error!("Parallax create failed: {}", e);
-                        ui.set_parallax_status(SharedString::from("Failed — see Diagnostics."));
+                        ui.set_parallax_status(SharedString::from("Failed - see Diagnostics."));
                         push_toast_timer("Parallax Failed", "Could not create the wallpaper.", true);
                     }
                 }
@@ -2784,24 +2788,24 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                             *preview_state_timer.borrow_mut() = Some(state);
                             ui.set_parallax_has_preview(true);
                             ui.set_parallax_progress(100);
-                            ui.set_parallax_status(SharedString::from("Preview ready — Save to add it to your Library."));
+                            ui.set_parallax_status(SharedString::from("Preview ready - Save to add it to your Library."));
                         }
                         Err(e) => {
                             log::error!("Parallax preview build failed: {}", e);
                             ui.set_parallax_progress(0);
-                            ui.set_parallax_status(SharedString::from("Preview failed — see Diagnostics."));
+                            ui.set_parallax_status(SharedString::from("Preview failed - see Diagnostics."));
                         }
                     },
                     Err(e) => {
                         log::error!("Parallax depth/preview failed: {}", e);
                         ui.set_parallax_progress(0);
-                        ui.set_parallax_status(SharedString::from("Failed — see Diagnostics."));
+                        ui.set_parallax_status(SharedString::from("Failed - see Diagnostics."));
                     }
                 }
             }
         }
         // Animate the preview (~10 fps) only while the Parallax tab is open AND the
-        // window is on-screen — no point rendering frames nobody can see.
+        // window is on-screen - no point rendering frames nobody can see.
         if let Some(ui) = ui_handle_timer.upgrade() {
             if ui_visible_timer.get() && ui.get_active_tab() == "parallax" {
                 if let Some(state) = preview_state_timer.borrow_mut().as_mut() {
@@ -2830,11 +2834,11 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                 match res {
                     Ok(_) => {
                         refresh_parallax_download_state(&ui); // recompute → hides the button
-                        push_toast_timer("Models Ready", "All required models downloaded — ready to generate.", false);
+                        push_toast_timer("Models Ready", "All required models downloaded - ready to generate.", false);
                     }
                     Err(e) => {
                         log::error!("Model download failed: {}", e);
-                        ui.set_parallax_download_text(SharedString::from("Download failed — see Diagnostics."));
+                        ui.set_parallax_download_text(SharedString::from("Download failed - see Diagnostics."));
                         push_toast_timer("Download Failed", "Could not download the models.", true);
                     }
                 }
@@ -2855,7 +2859,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
 
         // Live re-bake: ~180ms after the tuning sliders settle, re-bake the preview's
         // shader with the new params (reusing the cached depth/inpaint via style.toml) and
-        // reload the preview renderer — instant tuning with NO model inference.
+        // reload the preview renderer - instant tuning with NO model inference.
         if let Some(t) = parallax_tune_settle_timer.get() {
             if t.elapsed() >= std::time::Duration::from_millis(180) {
                 parallax_tune_settle_timer.set(None);
@@ -2890,7 +2894,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             if let Some(sz) = restore_size.take() {
                 ui.window().set_size(sz);
             } else if needs_repaint_timer.replace(false) && !ui_maximized_timer.get() {
-                // Skip while maximized — resizing a maximized window would shift it.
+                // Skip while maximized - resizing a maximized window would shift it.
                 let sz = ui.window().size();
                 ui.window().set_size(slint::PhysicalSize::new(sz.width, sz.height + 2));
                 restore_size.set(Some(sz));
@@ -2906,7 +2910,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                 ui.set_frame_time(tel.frame_time);
                 ui.set_vram_usage(tel.vram_usage);
             }
-            // Whether anything is actually being rendered — drives the "Inactive"
+            // Whether anything is actually being rendered - drives the "Inactive"
             // state on the diagnostics cards (avoids a scary 0 FPS / LOW / -0 MB
             // when no shader is assigned).
             let engine_active = app_state_timer.read()
@@ -2929,12 +2933,12 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                 };
                 // Surface a discrete shader-apply failure as a destructive toast.
                 // Only the one-shot "Layer reload error" (a compile/build failure
-                // at apply time) triggers this — per-frame wgpu errors are left to
+                // at apply time) triggers this - per-frame wgpu errors are left to
                 // the log to avoid toast spam.
                 if level == "ERROR" && message.starts_with("Layer reload error") {
                     push_toast_timer(
                         "Failed to Apply Shader",
-                        "A shader could not be loaded — see the Diagnostics log for details.",
+                        "A shader could not be loaded - see the Diagnostics log for details.",
                         true,
                     );
                 }
@@ -2963,7 +2967,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                             // monitor). If it landed MAXIMIZED, that resize repaints the
                             // window on its own. Otherwise the restored size may equal the
                             // current size (no resize → no repaint), so we still nudge a
-                            // resize to force the full repaint — without it the small window
+                            // resize to force the full repaint - without it the small window
                             // comes back as white blocks until a mouse-move / resize.
                             let maximized = platform::windows::restore_window_placement(ui_hwnd_timer.get());
                             if !maximized && restore_size.get().is_none() {
@@ -2985,7 +2989,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         }
     });
 
-    // ── "Refresh Monitors" button — rebuild wallpaper windows on demand ─────
+    // ── "Refresh Monitors" button - rebuild wallpaper windows on demand ─────
     // Replaces the old automatic timer-based detection; the user triggers this
     // manually after changing monitor configuration (same idea as Windows'
     // "Identify" button in Display Settings).
@@ -2998,7 +3002,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         let push_toast_mon = push_toast.clone();
 
         ui.on_refresh_monitors(move || {
-            log::info!("Refresh Monitors requested — rebuilding wallpaper windows");
+            log::info!("Refresh Monitors requested - rebuilding wallpaper windows");
 
             // Tear down existing windows.  Send WindowClosed (render threads shut
             // down + release their surfaces), hide each window immediately, and
@@ -3060,7 +3064,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     ui.window().on_close_requested(move || {
         if let Some(ui) = ui_handle_close.upgrade() {
             // Snapshot placement (maximized state + monitor) BEFORE hiding, so "Show
-            // Strata" can restore the exact geometry — hide()/show() loses it otherwise.
+            // Strata" can restore the exact geometry - hide()/show() loses it otherwise.
             #[cfg(target_os = "windows")]
             {
                 platform::windows::save_window_placement(ui_hwnd_close.get());
@@ -3068,7 +3072,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                 let _ = toggle_item_close.set_text("Show Strata");
             }
             ui.hide().ok();
-            ui_visible_close.set(false); // hidden to tray — pause unseen work
+            ui_visible_close.set(false); // hidden to tray - pause unseen work
         }
         slint::CloseRequestResponse::KeepWindowShown
     });
@@ -3087,7 +3091,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         let needs_repaint_evt = needs_repaint.clone();
         ui.window().on_winit_window_event(move |win, event| {
             // NOTE: this fires for EVERY event (incl. high-frequency CursorMoved), so do
-            // only cheap flag-setting here — never per-event syscalls.
+            // only cheap flag-setting here - never per-event syscalls.
             match event {
                 WindowEvent::Resized(_) => {
                     // Maximized state only changes via a resize; query the syscall here,
@@ -3095,7 +3099,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                     ui_maximized_evt.set(win.is_maximized());
                     // A maximize/restore fires Moved (which arms the move-debounce) AND a
                     // Resized. The resize already self-heals the buffer, so cancel any
-                    // pending move-nudge — otherwise the nudge would resize (and shift) the
+                    // pending move-nudge - otherwise the nudge would resize (and shift) the
                     // just-maximized window a moment later. This is what was dragging the
                     // maximized window down on the portrait monitor.
                     move_settle_evt.set(None);
@@ -3116,7 +3120,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                 WindowEvent::Focused(true) => {
                     // Some taskbar minimize/restore cycles signal only via focus (no
                     // Occluded). Only force the full-repaint nudge if we believed the
-                    // window was hidden (a genuine restore) — NOT on every focus gain,
+                    // window was hidden (a genuine restore) - NOT on every focus gain,
                     // which would cause a 2px resize flicker on normal alt-tab/click.
                     win.request_redraw();
                     if !ui_visible_evt.get() {
@@ -3125,7 +3129,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                     ui_visible_evt.set(true);
                 }
                 WindowEvent::Moved(_) => {
-                    // Debounced in the timer — a move can reveal stale (unpainted) regions.
+                    // Debounced in the timer - a move can reveal stale (unpainted) regions.
                     move_settle_evt.set(Some(std::time::Instant::now()));
                 }
                 _ => {}
@@ -3154,7 +3158,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         }).ok();
     }
 
-    log::info!("UI ready — running Slint event loop.");
+    log::info!("UI ready - running Slint event loop.");
     // Use run_event_loop_until_quit (NOT ui.run()) so Strata behaves like a tray
     // app: the loop survives the last window closing. Pressing X on the main window
     // hides it to the tray (see on_close_requested); the process only ends via the
@@ -3171,7 +3175,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             hidden_to_tray.set(true);
             let _ = tray_toggle_item.set_text("Show Strata");
         }
-        // Don't call ui.show() — the loop below stays alive without any window.
+        // Don't call ui.show() - the loop below stays alive without any window.
     } else {
         ui.show()?;
     }
@@ -3183,9 +3187,10 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
 /// Query GitHub for the Strata repo's latest published release. Returns
 /// `Ok(Some((tag, html_url)))` if it's newer than the running build, `Ok(None)`
 /// if up to date or no release exists yet (404), or `Err` on a network/parse
-/// failure. Runs synchronously — call it off the UI thread.
+/// failure. Runs synchronously - call it off the UI thread.
 fn check_github_latest() -> Result<Option<(String, String)>, String> {
-    let resp = ureq::get("https://api.github.com/repos/BadassBaboon/Strata/releases/latest")
+    let resp = library_sync::http_agent()
+        .get("https://api.github.com/repos/BadassBaboon/Strata/releases/latest")
         .set("User-Agent", "Strata-Updater")
         .set("Accept", "application/vnd.github+json")
         .timeout(std::time::Duration::from_secs(10))
@@ -3268,7 +3273,7 @@ fn thumbnail_from_source(src: &std::path::Path, out: &std::path::Path, w: u32, h
 /// is dropped when generation finishes. This is the key to keeping the app
 /// lightweight: compiling a whole library of shaders piles up hundreds of MB of
 /// driver memory, and that memory is only returned to the OS when the *device* is
-/// destroyed — so we never let it accumulate on the app's long-lived device.
+/// destroyed - so we never let it accumulate on the app's long-lived device.
 /// (Measured: shared-device generation left ~1.3 GB committed; a dedicated device
 /// dropped afterward settles back to ~18 MB.) Each finished thumbnail is sent over
 /// `tx` for the UI timer to load; `busy` drives the refresh spinner.
@@ -3319,7 +3324,7 @@ fn spawn_thumbnail_generation(
             let Some(ctx) = ctx.as_ref() else { break };
             let out = controller::thumbnail_path(wp);
             // Parallax packages (image.png + depth.png) thumbnail straight from the
-            // user's source photo — no shader render — so the library shows the
+            // user's source photo - no shader render - so the library shows the
             // actual picture, and it's cheaper than a GPU pass.
             let src = wp.join("image.png");
             let result = if src.exists() && wp.join("depth.png").exists() {
@@ -3332,7 +3337,7 @@ fn spawn_thumbnail_generation(
                 Ok(()) => { let _ = tx.send((wp.clone(), out)); }
                 Err(e) => log::warn!("Thumbnail failed for {:?}: {}", wp.file_name().unwrap_or_default(), e),
             }
-            // Throttle: a gentle background task — keeps CPU low and lets the GPU
+            // Throttle: a gentle background task - keeps CPU low and lets the GPU
             // serve the live wallpapers between shaders.
             std::thread::sleep(std::time::Duration::from_millis(250));
         }
@@ -3344,7 +3349,7 @@ fn spawn_thumbnail_generation(
         log::info!("Thumbnail generation complete");
     });
     if spawned.is_err() {
-        // Thread never started — release the guard or the spinner runs forever.
+        // Thread never started - release the guard or the spinner runs forever.
         log::error!("Thumbnail thread spawn failed");
         busy_guard.store(false, Ordering::SeqCst);
     }
@@ -3422,7 +3427,7 @@ fn shader_quality_to_scale(label: &str) -> f32 {
     }
 }
 
-/// Inverse of [`shader_quality_to_scale`] — the canonical label for a stored scale.
+/// Inverse of [`shader_quality_to_scale`] - the canonical label for a stored scale.
 fn scale_to_shader_quality(scale: f32) -> &'static str {
     if scale < 0.625 {
         "Low (Performance Mode)"
@@ -3441,7 +3446,7 @@ fn default_monitor_color(id: &str) -> String {
 }
 
 /// Wall-clock time-of-day as HH:MM:SS (UTC) for diagnostics log timestamps.
-/// Uses std only — avoids pulling in a date/time crate for a cosmetic stamp.
+/// Uses std only - avoids pulling in a date/time crate for a cosmetic stamp.
 fn now_hms() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -3452,7 +3457,7 @@ fn now_hms() -> String {
 }
 
 #[cfg(target_os = "windows")]
-/// Resolve a bundled asset by name, anchored to the EXECUTABLE's directory — never
+/// Resolve a bundled asset by name, anchored to the EXECUTABLE's directory - never
 /// the current working directory. This matters for autostart: the Run-key launch at
 /// boot has CWD = System32 (not the install dir), so a CWD-relative `assets/…` lookup
 /// failed and the tray icon fell back to a solid square. Tries the installed layout
