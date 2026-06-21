@@ -32,7 +32,7 @@ pub struct UniformState {
     start_time: Instant,
     last_frame_time: Instant,
 
-    // When Some, iTime is forced to this value (instead of wall-clock) — used by
+    // When Some, iTime is forced to this value (instead of wall-clock) - used by
     // headless thumbnail capture to render a deterministic, settled frame.
     pub headless_time: Option<f32>,
 
@@ -182,7 +182,7 @@ impl UniformState {
     fn calculate_date() -> [f32; 4] {
         // Shadertoy's iDate = (year, month, day, seconds-since-local-midnight),
         // matching JS Date: month is 0-based, day is 1-based, and crucially the
-        // time is LOCAL wall-clock — that's what the clock shaders read from
+        // time is LOCAL wall-clock - that's what the clock shaders read from
         // iDate.w to display the user's actual system time (incl. timezone/DST).
         use chrono::{Datelike, Timelike, Local};
         let now = Local::now();

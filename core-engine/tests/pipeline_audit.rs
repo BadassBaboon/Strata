@@ -76,7 +76,7 @@ async fn run() {
 }
 
 // Render several frames of every wallpaper into an offscreen texture and assert
-// no wgpu validation errors fire — catches render-time bugs the build-only audit
+// no wgpu validation errors fire - catches render-time bugs the build-only audit
 // misses, e.g. the double-buffered (BufferA) texture feedback loop in clock-time.
 #[test]
 #[ignore]

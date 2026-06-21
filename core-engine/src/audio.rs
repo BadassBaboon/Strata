@@ -17,7 +17,7 @@
 //! let the audio device idle (lightweight / battery-friendly).
 //!
 //! Robustness: if no device/stream is available the engine simply yields silence
-//! (zeros) — audio shaders then render as they did before (no crash).
+//! (zeros) - audio shaders then render as they did before (no crash).
 //!
 //! Cross-platform note: system-audio LOOPBACK here relies on cpal's WASAPI
 //! behaviour (input stream on the default *output* device → loopback). On
@@ -54,7 +54,7 @@ pub struct AudioEngine {
     gain: std::sync::atomic::AtomicU32,
     // Millis (since `base`) of the most recent `texture_rgba()` call. The capture
     // thread opens the OS audio stream only while this is recent and closes it
-    // after IDLE_STOP_MS — so we never capture system audio when no audio-reactive
+    // after IDLE_STOP_MS - so we never capture system audio when no audio-reactive
     // wallpaper is on screen (key to the lightweight, battery-friendly goal).
     last_request: Arc<AtomicU64>,
     base: Instant,
@@ -80,7 +80,7 @@ impl AudioEngine {
         let shared_t = shared.clone();
         let running_t = running.clone();
         let last_req_t = last_request.clone();
-        // Spawn failure is non-fatal — the engine just yields silence.
+        // Spawn failure is non-fatal - the engine just yields silence.
         let capture = std::thread::Builder::new()
             .name("strata-audio".into())
             .spawn(move || run_capture(shared_t, running_t, last_req_t, base))
@@ -139,7 +139,7 @@ impl Drop for AudioEngine {
 fn compute(s: &mut Shared, gain: f32) {
     let n = FFT_SIZE;
     // Pull the most recent `n` samples (zero-padded if we don't have enough yet)
-    // into the reused scratch buffer — no per-call allocation.
+    // into the reused scratch buffer - no per-call allocation.
     let len = s.ring.len();
     let start = len.saturating_sub(n);
     let mut filled = 0;
@@ -165,7 +165,7 @@ fn compute(s: &mut Shared, gain: f32) {
         let db = 20.0 * (mag + 1e-6).log10();
         // Match the WebAudio AnalyserNode mapping Shadertoy uses: dB in
         // [minDecibels=-100, maxDecibels=-30] → [0,1]. This is much "hotter" than
-        // a -60..0 range — present frequencies land at 0.6-1.0, which is what
+        // a -60..0 range - present frequencies land at 0.6-1.0, which is what
         // shaders expecting Shadertoy's spectrum (e.g. logistic-gated ones) need.
         let v = ((db + 100.0) / 70.0 * gain).clamp(0.0, 1.0);
         // Temporal smoothing: fast attack, slow release (nice visualizer feel).

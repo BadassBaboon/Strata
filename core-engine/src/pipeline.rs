@@ -38,7 +38,7 @@ pub fn blend_for_mode(mode: &str) -> wgpu::BlendState {
             color: BlendComponent { src_factor: BlendFactor::One, dst_factor: BlendFactor::OneMinusSrc, operation: BlendOperation::Add },
             alpha: BlendComponent { src_factor: BlendFactor::One, dst_factor: BlendFactor::OneMinusSrcAlpha, operation: BlendOperation::Add },
         },
-        _ => BlendState { // normal — premultiplied alpha over
+        _ => BlendState { // normal - premultiplied alpha over
             color: BlendComponent { src_factor: BlendFactor::One, dst_factor: BlendFactor::OneMinusSrcAlpha, operation: BlendOperation::Add },
             alpha: BlendComponent { src_factor: BlendFactor::One, dst_factor: BlendFactor::OneMinusSrcAlpha, operation: BlendOperation::Add },
         },
@@ -55,7 +55,7 @@ impl RenderTargetData {
     /// `history = true` allocates 2 ping-pong slots so the render-graph can give
     /// a pass the previous-frame version of this buffer (Shadertoy semantics:
     /// self-feedback or read-before-produce). Buffers only ever read at their
-    /// current-frame slot get a single texture — at full resolution in
+    /// current-frame slot get a single texture - at full resolution in
     /// Rgba16Float that halves the offscreen memory for plain multipass shaders.
     pub fn new(device: &wgpu::Device, width: u32, height: u32, history: bool) -> Self {
         let slots = if history { 2 } else { 1 };
@@ -121,6 +121,7 @@ pub struct WallpaperPipeline {
     // entry always has a Cube view to bind.
     pub default_cube_view: wgpu::TextureView,
     pub default_sampler: wgpu::Sampler,
+    pub clamp_sampler: wgpu::Sampler,
     // 512×2 audio texture (row0=FFT, row1=waveform) for shaders with an `audio`
     // iChannel; updated every frame from the shared AudioEngine. None if unused.
     pub audio_texture: Option<wgpu::Texture>,
@@ -235,6 +236,20 @@ impl WallpaperPipeline {
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
             address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+
+        // Clamp-to-edge variant, selected per channel for bindings with wrap = "clamp".
+        // Fluid/feedback sims need this so neighbour reads at the edges don't wrap around
+        // and corrupt the border solve. Same linear filtering as the default sampler.
+        let clamp_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Clamp Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
@@ -398,12 +413,12 @@ void main() {
             let channel_bind_groups = [
                 Self::create_channel_bind_group(
                     device, &channel_layout, &pass_cfg.bindings,
-                    &textures, &targets, &default_view, &default_cube_view, &default_sampler,
+                    &textures, &targets, &default_view, &default_cube_view, &default_sampler, &clamp_sampler,
                     audio_view.as_ref(), pass_index, &config.wallpaper.passes, 0,
                 ),
                 Self::create_channel_bind_group(
                     device, &channel_layout, &pass_cfg.bindings,
-                    &textures, &targets, &default_view, &default_cube_view, &default_sampler,
+                    &textures, &targets, &default_view, &default_cube_view, &default_sampler, &clamp_sampler,
                     audio_view.as_ref(), pass_index, &config.wallpaper.passes, 1,
                 ),
             ];
@@ -449,12 +464,13 @@ void main() {
             default_view,
             default_cube_view,
             default_sampler,
+            clamp_sampler,
             audio_texture,
             audio_view,
         })
     }
 
-    /// True if some pass reads `target_name`'s PREVIOUS-frame contents — i.e.
+    /// True if some pass reads `target_name`'s PREVIOUS-frame contents - i.e.
     /// the buffer binds itself (feedback) or binds into a pass that runs at or
     /// before its producer. Only such buffers need a second ping-pong texture.
     fn target_needs_history(config: &WallpaperConfig, target_name: &str) -> bool {
@@ -480,6 +496,7 @@ void main() {
         default_view: &wgpu::TextureView,
         default_cube_view: &wgpu::TextureView,
         default_sampler: &wgpu::Sampler,
+        clamp_sampler: &wgpu::Sampler,
         audio_view: Option<&wgpu::TextureView>,
         // Render-graph slot resolution: `this_index` is this pass's position in
         // `pass_order` (the per-frame execution order, e.g. bufferA,B,C,D,image),
@@ -503,11 +520,14 @@ void main() {
         for binding in bindings {
             if binding.channel < 4 {
                 let binding_idx = binding.channel * 2;
+                // Per-channel wrap mode: "clamp" picks the clamp sampler, anything else
+                // (incl. omitted) keeps the default repeat sampler.
+                let samp = if binding.wrap.as_deref() == Some("clamp") { clamp_sampler } else { default_sampler };
                 match binding.binding_type.as_str() {
                     "texture" | "cubemap" => {
                         if let Some(ref path) = binding.path {
                             if let Some(tex) = loaded_textures.get(path) {
-                                resources[binding.channel as usize] = (binding_idx, &tex.view, default_sampler);
+                                resources[binding.channel as usize] = (binding_idx, &tex.view, samp);
                             }
                         }
                     }
@@ -522,7 +542,7 @@ void main() {
                                     .position(|p| p == target_name)
                                     .is_some_and(|pi| pi < this_index);
                                 let slot = if produced_earlier { (1 - parity) & 1 } else { parity & 1 };
-                                resources[binding.channel as usize] = (binding_idx, target.view_at(slot), default_sampler);
+                                resources[binding.channel as usize] = (binding_idx, target.view_at(slot), samp);
                             }
                         }
                     }
@@ -530,7 +550,7 @@ void main() {
                         // Bind the live 512×2 audio texture (FFT + waveform);
                         // falls back to the silent default if audio is disabled.
                         let v = audio_view.unwrap_or(default_view);
-                        resources[binding.channel as usize] = (binding_idx, v, default_sampler);
+                        resources[binding.channel as usize] = (binding_idx, v, samp);
                     }
                     _ => {}
                 }

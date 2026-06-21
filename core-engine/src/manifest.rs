@@ -54,6 +54,10 @@ pub struct BindingConfig {
     pub path: Option<String>,
     pub target: Option<String>,
     pub stream: Option<String>,
+    /// Texture wrap mode for this channel: "clamp" or "repeat" (default). Shadertoy
+    /// fluid/feedback sims need clamp so neighbour reads at the edges don't wrap around
+    /// and corrupt the border solve. Omitted = repeat (the historical behaviour).
+    pub wrap: Option<String>,
 }
 
 impl WallpaperConfig {
@@ -86,6 +90,7 @@ impl WallpaperConfig {
                                     path: None,
                                     target: None,
                                     stream: Some(file_name),
+                                    wrap: None,
                                 });
                             } else if ext.eq_ignore_ascii_case("png") || ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg") {
                                 let channel = if file_name.contains("iChannel0") { 0 }
@@ -99,6 +104,7 @@ impl WallpaperConfig {
                                     path: Some(file_name),
                                     target: None,
                                     stream: None,
+                                    wrap: None,
                                 });
                             }
                         }

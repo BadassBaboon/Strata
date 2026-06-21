@@ -7,7 +7,7 @@
 //!
 //! The LaMa ONNX path is behind the `depth-onnx` feature (shares ONNX Runtime with
 //! depth estimation). Model: `Carve/LaMa-ONNX` `lama_fp32.onnx` (Apache-2.0), fixed
-//! 512×512 input — inputs `image` [1,3,512,512] + `mask` [1,1,512,512] (1 = fill),
+//! 512×512 input - inputs `image` [1,3,512,512] + `mask` [1,1,512,512] (1 = fill),
 //! output `output` [1,3,512,512].
 
 use image::{DynamicImage, GrayImage, ImageBuffer, Luma, imageops::FilterType};
@@ -39,7 +39,7 @@ pub fn foreground_mask(depth: &GrayImage, threshold: f32, dilate: u32) -> GrayIm
 
 /// Adaptive foreground/background split (Otsu's method) over the depth histogram,
 /// returned as a 0..1 threshold. Adapts per image so the subject is separated from
-/// the background wherever the natural near/far gap is — not a fixed cutoff that
+/// the background wherever the natural near/far gap is - not a fixed cutoff that
 /// only ever catches the very nearest pixels. Clamped to a sane range so a smooth
 /// (non-bimodal) depth map can't produce a degenerate threshold.
 pub fn otsu_threshold(depth: &GrayImage) -> f32 {
@@ -211,7 +211,7 @@ pub fn inpaint(model_path: &Path, image: &DynamicImage, mask: &GrayImage, upscal
         .map_err(|e| format!("ort session builder: {e}"))?
         .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level1)
         .map_err(|e| format!("ort optimization level: {e}"))?
-        // Free the working set when the session drops (see depth.rs) — no retained arena.
+        // Free the working set when the session drops (see depth.rs) - no retained arena.
         .with_memory_pattern(false)
         .map_err(|e| format!("ort memory pattern: {e}"))?
         .commit_from_file(model_path)
@@ -224,7 +224,7 @@ pub fn inpaint(model_path: &Path, image: &DynamicImage, mask: &GrayImage, upscal
         .map_err(|e| format!("LaMa inference: {e}"))?;
     let (_shape, data) = outputs[0].try_extract_tensor::<f32>().map_err(|e| format!("LaMa output: {e}"))?;
 
-    // Output may be 0..1 or 0..255 depending on the export — detect and scale.
+    // Output may be 0..1 or 0..255 depending on the export - detect and scale.
     let maxv = data.iter().copied().fold(0.0f32, f32::max);
     let scale = if maxv > 1.5 { 1.0 } else { 255.0 };
     let mut filled = RgbImage::new(LAMA_SIZE, LAMA_SIZE);
@@ -238,7 +238,7 @@ pub fn inpaint(model_path: &Path, image: &DynamicImage, mask: &GrayImage, upscal
     // the masked region (hard, so no original subject pixels bleed back as a ghost),
     // with only a NARROW seam-blend at the mask boundary to hide the texture step
     // between LaMa's (512-px, upscaled) fill and the sharp surrounding photo. The
-    // blend is a few px at full resolution — wide enough to soften the seam, far too
+    // blend is a few px at full resolution - wide enough to soften the seam, far too
     // narrow to resurrect the subject.
     // Optionally restore detail to the (soft, 512-px) fill with a 4× upscaler before
     // stretching to the source resolution; on any upscaler error fall back to the raw
@@ -344,6 +344,6 @@ mod tests {
         let p = out.get_pixel(100, 80).0;
         let still_red = p[0] > 200 && p[1] < 60 && p[2] < 60;
         assert!(!still_red, "masked region not inpainted, still red: {:?}", p);
-        println!("LaMa inpaint OK — center now {:?}", p);
+        println!("LaMa inpaint OK - center now {:?}", p);
     }
 }

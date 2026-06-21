@@ -1,6 +1,6 @@
 //! Validates the depth-parallax shader (resources/parallax.glsl) in our engine:
 //! it must compile in naga, render real image content, and shift the displaced
-//! sample as the camera (iMouse) moves — more so over the near foreground than
+//! sample as the camera (iMouse) moves - more so over the near foreground than
 //! the far background. Run with: `--ignored`.
 
 use core_engine::wgpu;
@@ -54,7 +54,7 @@ fn parallax_compiles_and_responds_to_camera() {
 
     // 1) Produced real content (not an all-black / single-color frame).
     let nonblack = left.chunks(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 30).count();
-    assert!(nonblack > (rw * rh / 4) as usize, "frame is mostly black — shader rendered nothing");
+    assert!(nonblack > (rw * rh / 4) as usize, "frame is mostly black - shader rendered nothing");
 
     // 2) Parallax responds to the camera: the two offsets must differ.
     let changed = left.chunks(4).zip(right.chunks(4))
@@ -63,7 +63,7 @@ fn parallax_compiles_and_responds_to_camera() {
     let pct = 100.0 * changed as f32 / (rw * rh) as f32;
     assert!(pct > 2.0, "camera move barely changed the image ({pct:.1}%); parallax not working");
 
-    println!("Parallax OK — {pct:.1}% of pixels shifted between left/right camera, {nonblack} non-black px");
+    println!("Parallax OK - {pct:.1}% of pixels shifted between left/right camera, {nonblack} non-black px");
 }
 
 #[test]
@@ -140,8 +140,8 @@ bindings = [
     // displaced footprint, not a stretched smear across the frame.
     let red_px = frame.chunks(4).filter(|c| reddish((c[0], c[1], c[2]))).count();
     let red_frac = red_px as f32 / (rw * rh) as f32;
-    assert!(red_frac < 0.25, "too much red — looks like taffy smear ({:.0}%)", red_frac * 100.0);
-    println!("Layered LDI OK — center {center:?}, bg corner {corner:?}, red {:.1}%", red_frac * 100.0);
+    assert!(red_frac < 0.25, "too much red - looks like taffy smear ({:.0}%)", red_frac * 100.0);
+    println!("Layered LDI OK - center {center:?}, bg corner {corner:?}, red {:.1}%", red_frac * 100.0);
 }
 
 fn render_rgba(r: &mut core_engine::Renderer, w: u32, h: u32) -> Vec<u8> {

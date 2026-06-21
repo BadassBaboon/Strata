@@ -268,7 +268,7 @@ fn run_monitor_loop(
             }
         }
 
-        // A command may have cleared every layer — re-check before drawing so
+        // A command may have cleared every layer - re-check before drawing so
         // we drop straight into the idle path next iteration.
         if renderer.pipelines.is_empty() {
             continue;
@@ -311,7 +311,7 @@ fn run_monitor_loop(
             Ok(_) => frame_count += 1,
             Err(core_engine::wgpu::CurrentSurfaceTexture::Outdated)
             | Err(core_engine::wgpu::CurrentSurfaceTexture::Lost) => {
-                // Use the fixed size, not window.inner_size() — on high-DPI
+                // Use the fixed size, not window.inner_size() - on high-DPI
                 // monitors inner_size() may return logical pixels that differ
                 // from the physical size we configured the surface at.
                 log::warn!("Surface lost/outdated for {:?}, recovering at {}×{}",

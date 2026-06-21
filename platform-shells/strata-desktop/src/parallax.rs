@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use core_engine::depth::{self, DepthEstimator, ModelChoice};
 use core_engine::parallax::{export_wallpaper, ParallaxParams};
 
-/// `%AppData%/strata/models` — where downloaded depth models live (never bundled).
+/// `%AppData%/strata/models` - where downloaded depth models live (never bundled).
 pub fn models_dir() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|b| b.data_dir().join("Strata").join("models"))
 }
@@ -53,7 +53,7 @@ pub fn download_model(choice: &ModelChoice, mut progress: impl FnMut(u64, u64)) 
             sizes.push(n);
             grand_total += n;
         } else {
-            let n = ureq::head(&f.url).call().ok()
+            let n = crate::library_sync::http_agent().head(&f.url).call().ok()
                 .and_then(|r| r.header("Content-Length").and_then(|s| s.parse().ok()))
                 .unwrap_or(0);
             sizes.push(n);
@@ -71,7 +71,7 @@ pub fn download_model(choice: &ModelChoice, mut progress: impl FnMut(u64, u64)) 
             continue;
         }
         log::info!("Downloading {} file {} ({} of {})", choice.id, f.name, i + 1, choice.files.len());
-        let resp = ureq::get(&f.url).call().map_err(|e| format!("download {} failed: {e}", f.name))?;
+        let resp = crate::library_sync::http_agent().get(&f.url).call().map_err(|e| format!("download {} failed: {e}", f.name))?;
         let tmp = dest.with_extension("part");
         let mut reader = resp.into_reader();
         let mut file = std::fs::File::create(&tmp).map_err(|e| format!("create {:?}: {e}", tmp))?;
@@ -111,7 +111,7 @@ fn estimate_depth(image: &image::DynamicImage, model: Option<&ModelChoice>) -> R
     depth::HeuristicEstimator::default().estimate(image)
 }
 
-/// `%AppData%/strata/parallax-preview` — scratch package for the live preview
+/// `%AppData%/strata/parallax-preview` - scratch package for the live preview
 /// (photo + depth + baked shader). Reused across renders so depth is estimated once.
 pub fn preview_dir() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|b| b.data_dir().join("Strata").join("parallax-preview"))
@@ -120,7 +120,7 @@ pub fn preview_dir() -> Option<PathBuf> {
 /// Estimate depth for `image_path` and build a parallax package in the preview
 /// scratch dir (NOT the library). Returns the preview dir. Background-thread work.
 /// Wipe the preview scratch dir so every render starts from a CLEAN package. A single
-/// `remove_dir_all` can fail intermittently on Windows — an antivirus scan (or any
+/// `remove_dir_all` can fail intermittently on Windows - an antivirus scan (or any
 /// transient handle) on the just-written PNGs / model file briefly locks a file. If that
 /// failure is ignored, stale files survive: e.g. a previous layered render's
 /// `background.png` lingers and the next render's preview shows the OLD inpainted fill
@@ -161,10 +161,10 @@ pub fn build_preview(
     let depth = estimate_depth(&image, model)?;
     progress(35);
 
-    // Generation is ALWAYS layered/cinematic now — it's the only mode (the plain
+    // Generation is ALWAYS layered/cinematic now - it's the only mode (the plain
     // non-layered output was inferior in ~99% of cases). The block below builds the
     // layered package and returns. It only falls through to the single-layer fallback
-    // when the ONNX build or the required models are unavailable — and Automatic mode
+    // when the ONNX build or the required models are unavailable - and Automatic mode
     // downloads the preset's models first, so that path is just a safety net.
     {
         #[cfg(feature = "depth-onnx")]
@@ -199,7 +199,7 @@ pub fn build_preview(
                     progress(85);
                     // Background depth: flatten over ALL subjects (incl. the dog) by
                     // diffusion, so NOTHING in the bg layer has a depth cliff to fold
-                    // around — the dog rides flat with the backdrop, keeping its pixels.
+                    // around - the dog rides flat with the backdrop, keeping its pixels.
                     let flatten_mask = core_engine::inpaint::foreground_mask(&alpha_full, 0.5, (dim / 150).max(8));
                     let bg_depth = core_engine::inpaint::fill_masked_depth(&depth, &flatten_mask);
                     // Foreground layer matte = primary subject only (drives the composite).
@@ -213,7 +213,7 @@ pub fn build_preview(
                 }
             }
         }
-        log::warn!("Cinematic models unavailable (ONNX build / models missing) — single-layer fallback");
+        log::warn!("Cinematic models unavailable (ONNX build / models missing) - single-layer fallback");
     }
 
     export_wallpaper(&dir, "Parallax Preview", "Parallax Studio", image_path, &depth, params)?;
@@ -221,7 +221,7 @@ pub fn build_preview(
     Ok(dir)
 }
 
-/// Re-bake just the shader in `dir` with new `params` (depth/photo unchanged) — for
+/// Re-bake just the shader in `dir` with new `params` (depth/photo unchanged) - for
 /// live slider tuning without re-estimating depth. (Wired up with the tuning sliders.)
 #[allow(dead_code)]
 pub fn rebake_params(dir: &Path, params: &ParallaxParams) -> Result<(), String> {
@@ -230,7 +230,7 @@ pub fn rebake_params(dir: &Path, params: &ParallaxParams) -> Result<(), String> 
 }
 
 /// Promote a preview package into the library under `display_name` with `params`
-/// (re-uses the already-estimated depth — no inference). Returns the library dir.
+/// (re-uses the already-estimated depth - no inference). Returns the library dir.
 pub fn save_to_library(preview: &Path, display_name: &str, params: &ParallaxParams) -> Result<PathBuf, String> {
     // Parallax creations live in %APPDATA%/strata/parallax-wallpapers (user data),
     // not the bundled/read-only install library.
@@ -239,7 +239,7 @@ pub fn save_to_library(preview: &Path, display_name: &str, params: &ParallaxPara
     std::fs::create_dir_all(&base).map_err(|e| format!("create {:?}: {e}", base))?;
     let out = unique_dir(&base, &slugify(display_name));
     std::fs::create_dir_all(&out).map_err(|e| format!("create {:?}: {e}", out))?;
-    // Copy the preview's assets verbatim — including image.glsl, which has the baked
+    // Copy the preview's assets verbatim - including image.glsl, which has the baked
     // shader (the layered shader bakes SUBJECT_DEPTH, so we must NOT re-derive it from
     // params here). Only the manifest is rewritten, to carry the library display name.
     let layered = preview.join("background.png").exists() && preview.join("mask.png").exists();

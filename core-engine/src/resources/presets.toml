@@ -1,14 +1,14 @@
-# Strata — Parallax Studio quality presets.
+# Strata - Parallax Studio quality presets.
 #
 # Each preset is a named bundle of model choices for the Automatic-mode Parallax
 # pipeline (always Cinematic / layered). `depth`, `segment`, `upscale` reference an
 # `id` from models.toml (`upscale = "off"` disables the inpaint upscaler). Embedded at
 # build time (include_str!) and parsed at runtime, so this can later be swapped for a
 # freshly-fetched copy from the external Strata-Library repo (community-submitted
-# presets via PR) without recompiling — same idea as models.toml.
+# presets via PR) without recompiling - same idea as models.toml.
 #
 # `ram` / `cpu` are human-readable guidance shown in the UI (NOT enforced). They were
-# profiled on the hardware in [meta.profiled_on]; treat them as ballpark — actual usage
+# profiled on the hardware in [meta.profiled_on]; treat them as ballpark - actual usage
 # scales with the user's CPU/GPU/RAM and DirectML driver.
 
 schema_version = 1

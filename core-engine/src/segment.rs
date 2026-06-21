@@ -1,6 +1,6 @@
 //! Salient-subject segmentation (U²-Net) for the Parallax Studio's cinematic mode.
 //!
-//! Decouples the subject mask from the depth map — depth thresholding ("the Otsu
+//! Decouples the subject mask from the depth map - depth thresholding ("the Otsu
 //! trap") slices a subject's continuous depth gradient and chops off whatever sits
 //! past the cutoff (e.g. a horse's tail). A dedicated segmentation model produces a
 //! whole-subject alpha regardless of depth.
@@ -46,7 +46,7 @@ pub fn segment_subject(model_path: &Path, image: &DynamicImage, input_size: u32)
         .map_err(|e| format!("ort session builder: {e}"))?
         .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level1)
         .map_err(|e| format!("ort optimization level: {e}"))?
-        // Free the working set when the session drops (see depth.rs) — no retained arena.
+        // Free the working set when the session drops (see depth.rs) - no retained arena.
         .with_memory_pattern(false)
         .map_err(|e| format!("ort memory pattern: {e}"))?
         .commit_from_file(model_path)
@@ -64,7 +64,7 @@ pub fn segment_subject(model_path: &Path, image: &DynamicImage, input_size: u32)
     // Normalize the saliency map to a 0..1 probability. Models differ in what they
     // emit: U²-Net's `d0` is already a sigmoid probability (values in 0..1), while
     // BiRefNet exports raw LOGITS (e.g. −80..25). Min-max normalization is fragile
-    // here — one extreme logit (BiRefNet-Full hits −82) stretches the range and
+    // here - one extreme logit (BiRefNet-Full hits −82) stretches the range and
     // drags the background up past the binarize threshold, whitening the whole
     // frame. So: if the output isn't already bounded to 0..1, treat it as logits and
     // squash with a sigmoid (saturates → immune to outliers); otherwise use it as-is.
@@ -83,7 +83,7 @@ pub fn segment_subject(model_path: &Path, image: &DynamicImage, input_size: u32)
 
     // Auto-polarity safety net: if a model emits an inverted matte, the WHOLE frame
     // reads "on" with the subject as a dark hole. Flip only when both the outer
-    // border AND the image as a whole are majority-on — a real salient subject is a
+    // border AND the image as a whole are majority-on - a real salient subject is a
     // centred minority, so this never fires on a legitimately large/central subject.
     let margin = (dim / 20).max(2) as usize;
     let (mut border_sum, mut border_cnt) = (0.0f64, 0usize);
@@ -191,7 +191,7 @@ mod tests {
             eprintln!("set STRATA_U2NET_MODEL to run");
             return;
         };
-        // A bright disc on a dark field — U²-Net should flag the disc as salient.
+        // A bright disc on a dark field - U²-Net should flag the disc as salient.
         let (w, h) = (240u32, 180u32);
         let mut img = image::RgbImage::new(w, h);
         let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
@@ -207,7 +207,7 @@ mod tests {
         assert_eq!(mask.dimensions(), (w, h));
         let center = mask.get_pixel(w / 2, h / 2).0[0];
         let corner = mask.get_pixel(2, 2).0[0];
-        println!("U2Net OK — center={center} corner={corner}");
+        println!("U2Net OK - center={center} corner={corner}");
         assert!(center > corner, "subject (center) should be more salient than corner");
     }
 }

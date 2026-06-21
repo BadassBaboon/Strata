@@ -30,7 +30,7 @@ fn quality_scales_targets_and_vram_then_restores() {
     let view = tex.create_view(&Default::default());
     r.encode_frame(&view);
 
-    // Back to full — targets restored, estimate returns to (about) the original.
+    // Back to full - targets restored, estimate returns to (about) the original.
     r.set_quality(1.0);
     let vram_back = r.estimate_vram_mb();
     assert!((vram_back - vram_full).abs() < 0.01,

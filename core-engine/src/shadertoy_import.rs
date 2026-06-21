@@ -118,7 +118,7 @@ fn pass_target(ptype: &str, name: &str) -> Option<(String, String)> {
 /// Convert a Shadertoy export into a Strata wallpaper package at `dest_dir`
 /// (created fresh; must not already exist). Texture/cubemap inputs are referenced
 /// by file name and must resolve against a shared asset root registered via
-/// [`crate::set_asset_dirs`] (the Strata-Library `external/` dir) — they are NOT
+/// [`crate::set_asset_dirs`] (the Strata-Library `external/` dir) - they are NOT
 /// copied into the wallpaper folder, so library assets live in one place.
 pub fn convert_shadertoy(
     json: &str,
@@ -158,7 +158,7 @@ pub fn convert_shadertoy(
     fs_create_dir(dest_dir)?;
 
     // Emitted .glsl files carry the raw Shadertoy code (only the naga `mat2` fix
-    // is applied) so they match shadertoy.com — name/author/source_url live in
+    // is applied) so they match shadertoy.com - name/author/source_url live in
     // manifest.toml, not in a comment header.
 
     // Write common.glsl (injected into every pass by the engine).

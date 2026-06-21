@@ -7,7 +7,7 @@ use serde::{Serialize, Deserialize};
 
 /// A wallpaper's thumbnail lives INSIDE its own folder as `thumbnail.png`, so the
 /// folder is fully self-contained (zip it up and it's a complete, re-uploadable
-/// pack — the same layout Strata-Library ships). This replaced the old central
+/// pack - the same layout Strata-Library ships). This replaced the old central
 /// `%APPDATA%/strata/thumbnails` cache.
 pub fn thumbnail_path(wallpaper_dir: &Path) -> PathBuf {
     wallpaper_dir.join("thumbnail.png")
@@ -179,7 +179,7 @@ pub fn import_wallpaper_zip(zip_path: &Path, dest_base: &Path) -> Result<PathBuf
     Ok(dest_path)
 }
 
-/// `%APPDATA%/strata` (Roaming) — root for user-generated content that must NOT
+/// `%APPDATA%/strata` (Roaming) - root for user-generated content that must NOT
 /// live in the (read-only in release) install directory.
 pub fn user_data_dir() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|b| b.data_dir().join("Strata"))
@@ -213,7 +213,7 @@ pub fn fetched_library_dir() -> Option<PathBuf> {
     user_data_dir().map(|d| d.join("strata-library").join("shader-library"))
 }
 
-/// Root of the fetched library tree (`…/strata-library`) — holds shader-library/,
+/// Root of the fetched library tree (`…/strata-library`) - holds shader-library/,
 /// external/, models.toml, presets.toml, index.toml. The sync target.
 pub fn fetched_library_root() -> Option<PathBuf> {
     user_data_dir().map(|d| d.join("strata-library"))
@@ -243,7 +243,7 @@ pub fn library_roots() -> Vec<PathBuf> {
 pub fn official_owner_repo() -> Option<(String, String)> {
     let url = official_repo_url()?;
     // Accept the jsDelivr form (…/gh/OWNER/REPO[@tag]) or the plain GitHub form
-    // (github.com/OWNER/REPO[.git]). Any @tag / trailing path is discarded — the
+    // (github.com/OWNER/REPO[.git]). Any @tag / trailing path is discarded - the
     // version is resolved from the repo's tags, not from this URL.
     let rest = if let Some(r) = url.split("/gh/").nth(1) {
         r
@@ -279,7 +279,7 @@ pub fn scan_all_wallpapers() -> Vec<WallpaperEntry> {
     all
 }
 
-/// Directory of bundled Shadertoy assets (`assets/external`) — the shared texture/
+/// Directory of bundled Shadertoy assets (`assets/external`) - the shared texture/
 /// cubemap library that shaders reference by name (NOT copied per-wallpaper).
 /// CWD-relative like `bundled_library_dir()` for now.
 pub fn assets_external_dir() -> PathBuf {
@@ -307,11 +307,18 @@ pub fn library_asset_dirs() -> Vec<PathBuf> {
 /// `repositories.toml` (falls back to the first repository, or None). The update
 /// check appends `/index.toml` to read the remote `library_version`.
 pub fn official_repo_url() -> Option<String> {
-    let path = if Path::new("repositories.toml").exists() {
-        PathBuf::from("repositories.toml")
-    } else {
-        PathBuf::from("../../repositories.toml")
-    };
+    // Resolve relative to the EXECUTABLE, never the CWD: an autostart (Run-key) launch at
+    // boot has CWD = System32, so a CWD-relative lookup failed and update/library checks
+    // reported "no official content repository configured". Installed layout = next to the
+    // exe; dev layout = repo root two levels up from target/release.
+    let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    let candidates: Vec<PathBuf> = exe_dir.into_iter().flat_map(|d| {
+        vec![d.join("repositories.toml"), d.join("..").join("..").join("repositories.toml")]
+    }).chain([
+        PathBuf::from("repositories.toml"),
+        PathBuf::from("../../repositories.toml"),
+    ]).collect();
+    let path = candidates.into_iter().find(|p| p.exists())?;
     let text = fs::read_to_string(path).ok()?;
     // Walk [[repository]] blocks; prefer one marked official.
     let mut first_url: Option<String> = None;

@@ -15,7 +15,7 @@ use std::ptr;
 
 // ── Main-window placement save/restore ──────────────────────────────────────────
 // Slint's hide()/show() (used for the tray) does NOT preserve the window's maximized
-// state or monitor — show() re-applies the component's preferred size at a default
+// state or monitor - show() re-applies the component's preferred size at a default
 // position. So before hiding we snapshot the full WINDOWPLACEMENT (normal rect +
 // maximized/minimized flag + which monitor) and re-apply it on show. SetWindowPlacement
 // also triggers a resize → Slint repaints fully, so it doubles as the bring-up repaint.
@@ -40,7 +40,7 @@ pub fn save_window_placement(hwnd: isize) {
 }
 
 /// Re-apply the placement saved by `save_window_placement`. Returns true if the window
-/// was restored to a MAXIMIZED state — in that case the maximize already resizes the
+/// was restored to a MAXIMIZED state - in that case the maximize already resizes the
 /// window (so it repaints itself) and the caller must NOT add a size nudge (that would
 /// un-maximize it). For a normal restore the size may be unchanged (→ no resize → no
 /// repaint), so the caller still needs its nudge.
@@ -53,7 +53,7 @@ pub fn restore_window_placement(hwnd: isize) -> bool {
     if hwnd == 0 { return false; }
     SAVED_PLACEMENT.with(|c| {
         if let Some(mut wp) = c.get() {
-            // Never restore to MINIMIZED — the user asked to show it. Fall back to the
+            // Never restore to MINIMIZED - the user asked to show it. Fall back to the
             // "restore-to" target (maximized if it was maximized before minimizing).
             if wp.showCmd == SW_SHOWMINIMIZED as u32 {
                 wp.showCmd = if (wp.flags & WPF_RESTORETOMAXIMIZED) != 0 {
@@ -75,7 +75,7 @@ pub fn restore_window_placement(hwnd: isize) -> bool {
 // The Windows desktop rendering layer is a special window called WorkerW.
 // After sending the 0x052C message to Progman, a WorkerW is created (or already
 // exists) behind the desktop icon container.  Child windows of this WorkerW
-// render behind desktop icons on ALL virtual desktops automatically — WorkerW
+// render behind desktop icons on ALL virtual desktops automatically - WorkerW
 // is a global shell window, so no special per-virtual-desktop handling is needed.
 //
 // Because many third-party applications also register windows with the "WorkerW"
@@ -88,7 +88,7 @@ pub fn get_wallpaper_window() -> Option<HWND> {
     unsafe {
         let progman = FindWindowExA(0, 0, b"Progman\0".as_ptr(), ptr::null());
         if progman == 0 {
-            log::error!("WorkerW search: Progman not found — cannot enable wallpaper mode");
+            log::error!("WorkerW search: Progman not found - cannot enable wallpaper mode");
             return None;
         }
         log::info!("WorkerW search: Progman HWND = {:x}", progman);
@@ -123,7 +123,7 @@ pub fn get_wallpaper_window() -> Option<HWND> {
                     log::info!("WorkerW: strategy 1 → {:x} ({}×{})", workerw, w, h);
                     return Some(workerw);
                 }
-                log::warn!("WorkerW: strategy 1 candidate {:x} too small — skipping", workerw);
+                log::warn!("WorkerW: strategy 1 candidate {:x} too small - skipping", workerw);
             }
         }
 
@@ -135,7 +135,7 @@ pub fn get_wallpaper_window() -> Option<HWND> {
                     log::info!("WorkerW: strategy 2 (below Progman) → {:x} ({}×{})", ww, w, h);
                     return Some(ww);
                 }
-                log::warn!("WorkerW: strategy 2 candidate {:x} too small — skipping", ww);
+                log::warn!("WorkerW: strategy 2 candidate {:x} too small - skipping", ww);
             }
         }
 
@@ -188,7 +188,7 @@ pub fn get_wallpaper_window() -> Option<HWND> {
         }
 
         log::warn!(
-            "WorkerW: not found after all strategies — wallpaper will sit above icons. \
+            "WorkerW: not found after all strategies - wallpaper will sit above icons. \
              Try: taskkill /f /im explorer.exe && start explorer.exe"
         );
         None
@@ -266,14 +266,14 @@ pub fn setup_wallpaper_window(
         SetWindowLongA(child, GWL_EXSTYLE,
             ((ex & !WS_EX_APPWINDOW) | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) as i32);
 
-        // Reparent into WorkerW — places rendering behind desktop icons.
+        // Reparent into WorkerW - places rendering behind desktop icons.
         // We do NOT change GWL_STYLE (keep WS_POPUP) to avoid the winit
         // GetClientRect panic described above.
         let prev = windows_sys::Win32::UI::WindowsAndMessaging::SetParent(child, workerw);
         if prev == 0 {
             let err = GetLastError();
             log::error!(
-                "setup_wallpaper_window: SetParent failed — error {} \
+                "setup_wallpaper_window: SetParent failed - error {} \
                  (5=access denied/UIPI, 1400=invalid HWND). \
                  HWND {:x} → WorkerW {:x}",
                 err, child, workerw

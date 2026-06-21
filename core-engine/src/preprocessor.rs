@@ -170,7 +170,7 @@ void main() {
     } else {
         // Normal / additive: premultiplied output (rgb*a). Shadertoy's image pass
         // treats fragColor as OPAQUE (its alpha is ignored), so we use the user's
-        // layer opacity as alpha — NOT color.a. Many shaders leave a garbage or
+        // layer opacity as alpha - NOT color.a. Many shaders leave a garbage or
         // <1 alpha (e.g. a final tanh()) which would otherwise dim the wallpaper.
         float a = iOpacity;
         outColor = vec4(color.rgb * a, a);
@@ -255,7 +255,7 @@ pub fn compile_shader_mapped(
 
     // naga's GLSL frontend can *panic* on some valid-but-unusual shaders (e.g.
     // large const arrays with const-indexed initializers). Catch the unwind so a
-    // single bad shader can never crash the render thread / freeze the desktop —
+    // single bad shader can never crash the render thread / freeze the desktop -
     // it just fails to load with an error instead.
     let parse_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut frontend = Frontend::default();

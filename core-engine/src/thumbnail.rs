@@ -12,7 +12,7 @@ use crate::{GraphicsContext, Renderer};
 
 /// Render `wallpaper_dir`'s shader to a `width`×`height` PNG at `out_path`.
 /// Returns an error (rather than panicking) if the shader fails to build or the
-/// readback/encode fails — the caller can skip that wallpaper and continue.
+/// readback/encode fails - the caller can skip that wallpaper and continue.
 pub fn generate_thumbnail(
     context: Arc<GraphicsContext>,
     wallpaper_dir: &Path,

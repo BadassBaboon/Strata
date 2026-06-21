@@ -12,7 +12,7 @@ pub struct Config {
     // ignores unknown keys, so dropping the field here is backwards-compatible.
     pub autostart: bool,
     // Frame-rate cap applied to every monitor's render loop.  `#[serde(default)]`
-    // keeps older config files (without this key) loadable — they fall back to 30.
+    // keeps older config files (without this key) loadable - they fall back to 30.
     #[serde(default = "default_target_fps")]
     pub target_fps: u32,
     // Audio-reactivity sensitivity (spectrum gain). 1.0 = default.
@@ -44,7 +44,7 @@ pub fn default_library_version() -> String {
     "1.0.0".to_string()
 }
 
-/// Default wallpaper frame cap — 60 FPS is the industry-standard smooth baseline.
+/// Default wallpaper frame cap - 60 FPS is the industry-standard smooth baseline.
 pub fn default_target_fps() -> u32 {
     60
 }
@@ -59,13 +59,13 @@ pub fn default_mouse_sensitivity() -> f32 {
     1.0
 }
 
-/// Default mouse-interactivity mode — only Parallax Studio wallpapers follow the
+/// Default mouse-interactivity mode - only Parallax Studio wallpapers follow the
 /// cursor (shaders stay non-interactive unless the user opts in).
 pub fn default_mouse_mode() -> String {
     "On (Only Parallax Studio)".to_string()
 }
 
-/// Default shader-quality preset — full native resolution.
+/// Default shader-quality preset - full native resolution.
 pub fn default_shader_quality() -> String {
     "High (Maximum Fidelity)".to_string()
 }

@@ -2,14 +2,14 @@
 //! depth map (near = bright) that [`crate::resources`]' parallax shader displaces.
 //!
 //! Two backends behind one [`DepthEstimator`] trait:
-//!   • [`HeuristicEstimator`] — always available, no download, no ML. A rough
+//!   • [`HeuristicEstimator`] - always available, no download, no ML. A rough
 //!     depth from a blurred luminance + radial center bias. Good enough to preview
 //!     and to use when the user doesn't want to fetch a model.
-//!   • [`OnnxEstimator`] — behind the `depth-onnx` cargo feature; runs a
+//!   • [`OnnxEstimator`] - behind the `depth-onnx` cargo feature; runs a
 //!     DepthAnything-style ONNX model via ONNX Runtime (`ort`) for real depth.
 //!
 //! The ONNX Runtime is an optional, heavy native dependency, so it's feature-gated
-//! to keep the base engine lightweight. Models are never bundled — the desktop
+//! to keep the base engine lightweight. Models are never bundled - the desktop
 //! shell downloads them on demand (see the model registry).
 
 use std::path::Path;
@@ -118,8 +118,8 @@ fn max_filter(src: &[f32], w: u32, h: u32, r: i32) -> Vec<f32> {
 
 // ── Heuristic backend (no ML, no download) ───────────────────────────────────
 
-/// A dependency-free depth approximation. Not physically accurate — it assumes
-/// the subject is brighter/central and the background darker/edges — but it lets
+/// A dependency-free depth approximation. Not physically accurate - it assumes
+/// the subject is brighter/central and the background darker/edges - but it lets
 /// the parallax pipeline and preview work with zero downloads.
 pub struct HeuristicEstimator {
     /// Working resolution for the blur pass (keeps it cheap on large photos).
@@ -203,7 +203,7 @@ pub struct OnnxEstimator {
     pub rank5: bool,
     /// True when the model outputs metric DISTANCE (larger = farther), e.g. V3.
     /// Such output must be converted to disparity (1/distance) before it can drive
-    /// parallax — see [`Self::estimate`]. V2 already emits disparity, so this is false.
+    /// parallax - see [`Self::estimate`]. V2 already emits disparity, so this is false.
     pub metric: bool,
 }
 
@@ -243,7 +243,7 @@ impl DepthEstimator for OnnxEstimator {
             .map_err(|e| format!("ort optimization level: {e}"))?
             // Disable memory-pattern pre-planning: it reserves a working buffer sized to
             // the run and keeps the allocator's high-water mark up. We run each model once
-            // then drop the session, so we want the memory back — not retained (fixes the
+            // then drop the session, so we want the memory back - not retained (fixes the
             // "RAM stuck high after generating with several models" leak). Inputs are
             // fixed-size, so there's no perf benefit to memory patterns here anyway.
             .with_memory_pattern(false)
@@ -271,7 +271,7 @@ impl DepthEstimator for OnnxEstimator {
 
         // Parallax/DIBR displaces each pixel by its DISPARITY (screen shift ∝ 1/distance),
         // not by distance. V2 already outputs affine-invariant inverse depth (disparity),
-        // which is why it parallaxes cleanly. V3 outputs metric DISTANCE — feeding that to
+        // which is why it parallaxes cleanly. V3 outputs metric DISTANCE - feeding that to
         // the shader linearly squashes the whole near/mid field into a thin band and leaves
         // a cliff to the far sky, which folds and shears under motion. So for metric models
         // we convert distance → disparity here, restoring a V2-like (parallax-correct)
@@ -314,11 +314,11 @@ impl DepthEstimator for OnnxEstimator {
 /// adapter the engine already created (`GraphicsContext::gpu_class`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GpuClass {
-    /// CPU / software rendering — only the small int8 model is practical.
+    /// CPU / software rendering - only the small int8 model is practical.
     Cpu,
-    /// Integrated GPU — small int8 is the sweet spot.
+    /// Integrated GPU - small int8 is the sweet spot.
     Integrated,
-    /// Dedicated GPU — can handle the fp16 base/large models.
+    /// Dedicated GPU - can handle the fp16 base/large models.
     Discrete,
 }
 
@@ -334,7 +334,7 @@ pub struct ModelFile {
 /// A model the Parallax Studio can download and run. One entry may span several
 /// files. The `id` doubles as the on-disk subdirectory, so identically named
 /// files (`model.onnx`) from different models never collide. Weights are NEVER
-/// bundled — the shell fetches them on demand, so non-free (CC BY-NC) weights
+/// bundled - the shell fetches them on demand, so non-free (CC BY-NC) weights
 /// remain the user's choice, not our redistribution.
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct ModelChoice {

@@ -24,7 +24,7 @@ use std::sync::RwLock;
 
 /// Shared asset search roots (e.g. the Strata-Library `external/` directory).
 /// Shaders reference textures/cubemaps by file name and the engine resolves them
-/// against the wallpaper folder first, then these roots — so library assets live
+/// against the wallpaper folder first, then these roots - so library assets live
 /// in ONE place instead of being copied into every wallpaper.
 static ASSET_DIRS: RwLock<Vec<PathBuf>> = RwLock::new(Vec::new());
 
@@ -72,7 +72,7 @@ pub struct GraphicsContext {
     pub audio: Option<Arc<audio::AudioEngine>>,
     // Set true if the GPU device is lost (driver TDR/reset, GPU hang, driver
     // update). The shell polls this and recovers. Once true, the device is dead
-    // and cannot be revived — a fresh device/context is required.
+    // and cannot be revived - a fresh device/context is required.
     pub device_lost: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -82,14 +82,14 @@ impl GraphicsContext {
         Self::create(true).await
     }
 
-    /// Lightweight context for offscreen work like thumbnail generation — no
+    /// Lightweight context for offscreen work like thumbnail generation - no
     /// audio engine. Create it, do the work, then DROP it: destroying the device
     /// returns all the driver's shader-compilation memory to the OS.
     pub async fn new_render_only() -> Result<Self, String> {
         Self::create(false).await
     }
 
-    /// Rough GPU class from the active adapter — used to pick a depth-model
+    /// Rough GPU class from the active adapter - used to pick a depth-model
     /// precision (see `depth::ModelTier::choose`).
     pub fn gpu_class(&self) -> depth::GpuClass {
         match self.adapter.get_info().device_type {
@@ -102,7 +102,7 @@ impl GraphicsContext {
     async fn create(with_audio: bool) -> Result<Self, String> {
         // Prefer each platform's most mature naga backend. On Windows that's DX12
         // (HLSL): naga's SPIR-V/Vulkan backend *panics* during codegen on some
-        // complex shadertoy shaders (e.g. neonwave-sunrise — "Expression is not
+        // complex shadertoy shaders (e.g. neonwave-sunrise - "Expression is not
         // cached") that the HLSL backend compiles cleanly. We try the preferred
         // backend first and fall back to all backends if it has no adapter.
         // (Metal on macOS/iOS and the platform default elsewhere are likewise the
@@ -149,7 +149,7 @@ impl GraphicsContext {
         // "Handling wgpu errors as fatal by default" and aborts). A single bad
         // shadertoy shader could thus take down the whole app / freeze the
         // desktop. Install our own handler that just logs the error so the
-        // render thread survives — the offending layer renders wrong at worst.
+        // render thread survives - the offending layer renders wrong at worst.
         //
         // A broken shader can emit the SAME validation error every frame, so we
         // throttle: an identical message is logged at most once every 10s, and a
@@ -161,7 +161,7 @@ impl GraphicsContext {
             let msg = err.to_string();
             // Skip cascade noise: once a resource fails, wgpu emits follow-on
             // "[Invalid X] is invalid." errors for everything that used it. They
-            // carry no new info — only the original error matters.
+            // carry no new info - only the original error matters.
             if msg.contains("] is invalid") {
                 return;
             }
@@ -178,13 +178,13 @@ impl GraphicsContext {
             }
         }));
 
-        // Device-loss (TDR / driver reset / GPU hang) is unrecoverable in place —
+        // Device-loss (TDR / driver reset / GPU hang) is unrecoverable in place -
         // raise a flag the shell polls to rebuild a fresh device.
         let device_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
         {
             let flag = device_lost.clone();
             device.set_device_lost_callback(move |reason, msg| {
-                // `Destroyed` fires on our own normal teardown — ignore it, only a
+                // `Destroyed` fires on our own normal teardown - ignore it, only a
                 // real loss (`Unknown`: driver TDR/reset/errors) triggers recovery.
                 if reason == wgpu::DeviceLostReason::Unknown {
                     log::error!("GPU device lost ({:?}): {}", reason, msg);
@@ -220,16 +220,16 @@ pub struct Renderer {
     pub global_resolution: (f32, f32),
     // Ping-pong parity (0/1), flipped each frame. Drives double-buffered render
     // targets deterministically so a self-feeding pass (e.g. a Shadertoy BufferA)
-    // always writes the slot opposite the one it samples — no texture is ever
+    // always writes the slot opposite the one it samples - no texture is ever
     // both a color target and a bound resource in the same pass.
     pub frame_parity: usize,
     // When Some (headless thumbnail capture), these 512×2 RGBA bytes are uploaded
-    // to audio-channel textures instead of the live AudioEngine — so an audio
+    // to audio-channel textures instead of the live AudioEngine - so an audio
     // visualizer renders a representative frame even with no sound playing.
     pub headless_audio: Option<Vec<u8>>,
     // Global render-quality scale (0.25–1.0). Below 1.0, each layer's final image
     // pass renders into a reduced-resolution offscreen "scene" target that is then
-    // cheaply upscaled to the surface — the single biggest perf lever for heavy
+    // cheaply upscaled to the surface - the single biggest perf lever for heavy
     // shaders. 1.0 renders straight to the surface (no overhead).
     quality_scale: f32,
     scene: Option<SceneUpscale>,
@@ -311,7 +311,7 @@ impl Renderer {
         };
         let surface_caps = surface.get_capabilities(&context.adapter);
         // Prefer a NON-sRGB (linear UNORM) surface. Shadertoy displays fragColor
-        // raw — it never applies an sRGB conversion — so shader authors bake
+        // raw - it never applies an sRGB conversion - so shader authors bake
         // their own gamma/tonemapping into the output (e.g. `pow(c, 1.0/2.2)` or
         // an explicit `sRGB()`). If we used an sRGB surface the GPU would encode
         // that already-display-ready output a SECOND time, lifting blacks to grey
@@ -403,7 +403,7 @@ impl Renderer {
 
     /// Set the global render-quality scale (0.25–1.0). 1.0 = native resolution.
     /// On change, resizes every layer's offscreen targets to the new effective
-    /// resolution and drops the scene target (rebuilt next frame) — so both the
+    /// resolution and drops the scene target (rebuilt next frame) - so both the
     /// GPU workload and the reported VRAM track the setting. No-op when unchanged.
     pub fn set_quality(&mut self, q: f32) {
         let q = q.clamp(0.25, 1.0);
@@ -418,7 +418,7 @@ impl Renderer {
     }
 
     /// Set which layers receive the cursor (0 = Off, 1 = All, 2 = Only shaders,
-    /// 3 = Only Parallax). Cheap — applied per frame in `encode_frame`.
+    /// 3 = Only Parallax). Cheap - applied per frame in `encode_frame`.
     pub fn set_mouse_mode(&mut self, mode: u8) {
         self.mouse_mode = mode;
     }
@@ -505,7 +505,7 @@ impl Renderer {
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
             // When global_resolution mirrors the surface size we're in the
-            // independent (non-span) case — keep them locked so the shader's
+            // independent (non-span) case - keep them locked so the shader's
             // iResolution tracks the new size.  In span mode global_resolution
             // is the whole-canvas size and must NOT be clobbered by a single
             // monitor's resize.
@@ -574,7 +574,7 @@ impl Renderer {
         self.pipelines.clear();
     }
 
-    /// Live-update a layer's spatial rect (no pipeline rebuild) — for the
+    /// Live-update a layer's spatial rect (no pipeline rebuild) - for the
     /// Compositor's drag preview. Marks the layer "Custom" so render() viewports it.
     pub fn set_layer_transform(&mut self, index: usize, transform: [f32; 4]) {
         if let Some(layer) = self.pipelines.get_mut(index) {
@@ -583,7 +583,7 @@ impl Renderer {
         }
     }
 
-    /// Live-update a layer's opacity (just the per-frame uniform — no rebuild).
+    /// Live-update a layer's opacity (just the per-frame uniform - no rebuild).
     pub fn set_layer_opacity(&mut self, index: usize, opacity: f32) {
         if let Some(layer) = self.pipelines.get_mut(index) {
             layer.opacity = opacity;
@@ -687,7 +687,7 @@ impl Renderer {
             for (layer_idx, layer) in self.pipelines.iter_mut().enumerate() {
                 // Does THIS layer receive the cursor? (Off / All / Only shaders /
                 // Only parallax.) If not, iMouse is zeroed below so the shader sees
-                // "no mouse" — a parallax layer then auto-animates on its own.
+                // "no mouse" - a parallax layer then auto-animates on its own.
                 let layer_gets_mouse = match mouse_mode {
                     1 => true,
                     2 => !layer.is_parallax,
@@ -739,7 +739,7 @@ impl Renderer {
 
                     {
                         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("layer offscreen pass"), // static — avoid per-frame alloc
+                            label: Some("layer offscreen pass"), // static - avoid per-frame alloc
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                                 view: target_view,
                                 depth_slice: None,
@@ -757,7 +757,7 @@ impl Renderer {
 
                         rpass.set_pipeline(&pass.pipeline);
                         rpass.set_bind_group(0, &pass.uniform_bind_group, &[]);
-                        // Sample the previous frame's slot — distinct from the
+                        // Sample the previous frame's slot - distinct from the
                         // write target above, so no read/write aliasing.
                         rpass.set_bind_group(1, &pass.channel_bind_groups[parity], &[]);
                         rpass.draw(0..3, 0..1);
@@ -836,7 +836,7 @@ impl Renderer {
 
                     {
                         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("layer image pass"), // static — avoid per-frame alloc
+                            label: Some("layer image pass"), // static - avoid per-frame alloc
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                                 view: image_target_view,
                                 depth_slice: None,
@@ -905,7 +905,7 @@ impl Renderer {
 
     pub fn estimate_vram_mb(&self) -> f32 {
         let mut total_bytes = 0u64;
-        // Swapchain: always native size (2 images × 4 bytes/px) — can't be scaled.
+        // Swapchain: always native size (2 images × 4 bytes/px) - can't be scaled.
         total_bytes += self.size.width as u64 * self.size.height as u64 * 4 * 2;
         // Offscreen buffer targets below are already sized at the effective
         // (quality-scaled) resolution, so lowering quality shrinks this total.
