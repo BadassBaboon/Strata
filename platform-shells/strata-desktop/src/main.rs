@@ -191,6 +191,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Args::parse();
 
+    // Elevated one-shot: write the MPO registry value and exit immediately (before any
+    // UI or single-instance handling). The Settings toggle relaunches us as admin with
+    // this flag so it can write HKLM without the main app running elevated.
+    #[cfg(windows)]
+    if let Some(v) = args.set_mpo.as_deref() {
+        let ok = set_mpo_disabled(v.eq_ignore_ascii_case("on"));
+        std::process::exit(if ok { 0 } else { 1 });
+    }
+
     if args.logs {
         std::env::set_var("RUST_LOG", "info");
     }
@@ -673,6 +682,110 @@ fn autostart_is_enabled() -> bool {
 #[cfg(not(windows))]
 fn autostart_is_enabled() -> bool { false }
 
+const MPO_SUBKEY: &str = "SOFTWARE\\Microsoft\\Windows\\Dwm";
+const MPO_VALUE: &str = "OverlayTestMode";
+
+/// True if MPO is currently disabled, i.e. `HKLM\…\Dwm\OverlayTestMode == 5`. Reading
+/// HKLM needs no elevation. Uses the 64-bit view to match what the installer writes.
+#[cfg(windows)]
+fn read_mpo_disabled() -> bool {
+    use windows_sys::Win32::System::Registry::{
+        RegOpenKeyExW, RegQueryValueExW, RegCloseKey, HKEY, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY,
+    };
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    unsafe {
+        let subkey: Vec<u16> = MPO_SUBKEY.encode_utf16().chain(std::iter::once(0)).collect();
+        let value: Vec<u16> = MPO_VALUE.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut hkey: HKEY = 0;
+        if RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.as_ptr(), 0, KEY_READ | KEY_WOW64_64KEY, &mut hkey) != ERROR_SUCCESS {
+            return false;
+        }
+        let mut data: u32 = 0;
+        let mut size: u32 = 4;
+        let res = RegQueryValueExW(
+            hkey, value.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut(),
+            &mut data as *mut u32 as *mut u8, &mut size,
+        );
+        RegCloseKey(hkey);
+        res == ERROR_SUCCESS && data == 5
+    }
+}
+
+#[cfg(not(windows))]
+fn read_mpo_disabled() -> bool { false }
+
+/// Write (`disabled=true` → OverlayTestMode=5) or clear (`false` → delete the value) the
+/// MPO registry key. Requires the process to be elevated (HKLM). Returns success.
+#[cfg(windows)]
+fn set_mpo_disabled(disabled: bool) -> bool {
+    use windows_sys::Win32::System::Registry::{
+        RegCreateKeyExW, RegSetValueExW, RegDeleteValueW, RegCloseKey, HKEY, HKEY_LOCAL_MACHINE,
+        KEY_SET_VALUE, KEY_WOW64_64KEY, REG_DWORD, REG_OPTION_NON_VOLATILE,
+    };
+    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, ERROR_FILE_NOT_FOUND};
+    unsafe {
+        let subkey: Vec<u16> = MPO_SUBKEY.encode_utf16().chain(std::iter::once(0)).collect();
+        let value: Vec<u16> = MPO_VALUE.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut hkey: HKEY = 0;
+        let mut disp: u32 = 0;
+        if RegCreateKeyExW(
+            HKEY_LOCAL_MACHINE, subkey.as_ptr(), 0, std::ptr::null(),
+            REG_OPTION_NON_VOLATILE, KEY_SET_VALUE | KEY_WOW64_64KEY, std::ptr::null(), &mut hkey, &mut disp,
+        ) != ERROR_SUCCESS {
+            return false;
+        }
+        let ok = if disabled {
+            let data: u32 = 5;
+            RegSetValueExW(hkey, value.as_ptr(), 0, REG_DWORD, &data as *const u32 as *const u8, 4) == ERROR_SUCCESS
+        } else {
+            let r = RegDeleteValueW(hkey, value.as_ptr());
+            r == ERROR_SUCCESS || r == ERROR_FILE_NOT_FOUND
+        };
+        RegCloseKey(hkey);
+        ok
+    }
+}
+
+#[cfg(not(windows))]
+fn set_mpo_disabled(_disabled: bool) -> bool { false }
+
+/// Relaunch ourselves elevated (UAC) to write the MPO value, waiting for the child to
+/// finish. Returns true if the elevated write succeeded (false if the user declined the
+/// UAC prompt or it failed). Run off the UI thread — it blocks on the child.
+#[cfg(windows)]
+fn set_mpo_elevated(disabled: bool) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SHELLEXECUTEINFOW, SEE_MASK_NOCLOSEPROCESS};
+    use windows_sys::Win32::System::Threading::{WaitForSingleObject, GetExitCodeProcess, INFINITE};
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
+    let Ok(exe) = std::env::current_exe() else { return false };
+    let exe_w: Vec<u16> = exe.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let verb: Vec<u16> = "runas".encode_utf16().chain(std::iter::once(0)).collect();
+    let params: Vec<u16> = format!("--set-mpo {}", if disabled { "on" } else { "off" })
+        .encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let mut sei: SHELLEXECUTEINFOW = std::mem::zeroed();
+        sei.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+        sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+        sei.lpVerb = verb.as_ptr();
+        sei.lpFile = exe_w.as_ptr();
+        sei.lpParameters = params.as_ptr();
+        sei.nShow = SW_HIDE as i32;
+        if ShellExecuteExW(&mut sei) == 0 || sei.hProcess == 0 {
+            return false; // user declined UAC, or launch failed
+        }
+        WaitForSingleObject(sei.hProcess, INFINITE);
+        let mut code: u32 = 1;
+        GetExitCodeProcess(sei.hProcess, &mut code);
+        CloseHandle(sei.hProcess);
+        code == 0
+    }
+}
+
+#[cfg(not(windows))]
+fn set_mpo_elevated(_disabled: bool) -> bool { false }
+
 /// Best-effort: tell the user (who just double-clicked the exe) that Strata is
 /// already running in the tray, so a silent no-op isn't confusing.
 #[cfg(windows)]
@@ -793,6 +906,8 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     #[cfg(target_os = "windows")]
     let ui_hwnd: std::rc::Rc<std::cell::Cell<isize>> = std::rc::Rc::new(std::cell::Cell::new(0));
     ui.set_autostart(config.autostart);
+    // Reflect the real (registry) MPO state in the Settings toggle.
+    ui.set_disable_mpo(read_mpo_disabled());
     ui.set_fps_cap(config.target_fps.clamp(1, 240) as i32);
     ui.set_audio_sensitivity(config.audio_sensitivity);
     ui.set_mouse_mode(SharedString::from(&config.mouse_mode));
@@ -2267,6 +2382,23 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         config.save().ok();
     });
 
+    // MPO toggle: writing HKLM\…\Dwm\OverlayTestMode needs admin, so relaunch ourselves
+    // elevated (UAC) on a worker thread. The toast can't be raised off-thread (push_toast
+    // isn't Send), so the worker stores a status the UI timer polls: 1 = changed (refresh
+    // the toggle + show a "restart required" toast), 2 = declined/failed (just snap the
+    // toggle back to reality).
+    let mpo_status = Arc::new(std::sync::atomic::AtomicU8::new(0));
+    {
+        let status = mpo_status.clone();
+        ui.on_mpo_toggled(move |enabled| {
+            let status = status.clone();
+            std::thread::spawn(move || {
+                let changed = set_mpo_elevated(enabled) && read_mpo_disabled() == enabled;
+                status.store(if changed { 1 } else { 2 }, std::sync::atomic::Ordering::Relaxed);
+            });
+        });
+    }
+
     let command_tx_debug = command_tx.clone();
     let app_state_debug = app_state.clone();
     let context_debug = context.clone();
@@ -2555,6 +2687,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     let telemetry_ui = telemetry.clone();
     let update_toast_pending_timer = update_toast_pending.clone();
     let library_fetch_status_timer = library_fetch_status.clone();
+    let mpo_status_timer = mpo_status.clone();
     let timer = slint::Timer::default();
     let logs_model = Rc::new(VecModel::<LogEntry>::from(Vec::new()));
     ui.set_logs(ModelRc::from(logs_model.clone()));
@@ -2660,9 +2793,22 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         if ui_visible_timer.get() {
             match library_fetch_status_timer.swap(0, std::sync::atomic::Ordering::Relaxed) {
                 1 => push_toast_timer("Library Ready", "Your wallpaper library has been downloaded.", false),
-                2 => push_toast_timer("Library Download Failed", "Couldn't fetch the library \u{2014} check your connection, then retry in Settings \u{2192} Updates.", true),
+                2 => push_toast_timer("Library Download Failed", "Couldn't fetch the library - check your connection, then retry in Settings \u{2192} Updates.", true),
                 _ => {}
             }
+        }
+
+        // MPO toggle result (set from the elevated worker; toast raised here since
+        // push_toast isn't Send). Snap the toggle to the real registry state either way.
+        match mpo_status_timer.swap(0, std::sync::atomic::Ordering::Relaxed) {
+            1 => {
+                if let Some(ui) = ui_handle_timer.upgrade() { ui.set_disable_mpo(read_mpo_disabled()); }
+                push_toast_timer("Restart Required", "Restart your PC for the Multi-Plane Overlay change to take effect.", false);
+            }
+            2 => {
+                if let Some(ui) = ui_handle_timer.upgrade() { ui.set_disable_mpo(read_mpo_disabled()); }
+            }
+            _ => {}
         }
 
         // ── GPU device-loss recovery ──
@@ -3513,4 +3659,10 @@ struct Args {
     /// the PC doesn't pop the window open).
     #[arg(long)]
     minimized: bool,
+
+    /// Internal: write the MPO (OverlayTestMode) registry value and exit. Invoked
+    /// elevated (via the Settings toggle) since it writes HKLM. "on" disables MPO,
+    /// "off" re-enables it.
+    #[arg(long)]
+    set_mpo: Option<String>,
 }
