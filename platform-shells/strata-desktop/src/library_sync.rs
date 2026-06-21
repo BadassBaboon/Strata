@@ -4,13 +4,32 @@
 //!
 //! The library is small, so a sync downloads the tag's **zipball** in one shot and
 //! extracts it (atomic swap, no per-file fetching or manifest parsing). Version
-//! discovery uses the GitHub **tags** API and picks the highest `library-v*` tag —
+//! discovery uses the GitHub **tags** API and picks the highest `library-v*` tag -
 //! that's how Strata learns a newer library (e.g. `library-v1.1.0`) was published.
 
 use std::io::Read;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 const UA: &str = "Strata-Library-Sync";
+
+/// Shared HTTP agent using the OS TLS stack (native-tls → Schannel on Windows). Built
+/// once and cheaply cloned. Using the system TLS keeps update/library traffic working
+/// behind VPNs, proxies and corporate middleboxes that reject the rustls handshake.
+pub fn http_agent() -> ureq::Agent {
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    AGENT.get_or_init(|| {
+        let builder = ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_secs(15));
+        match native_tls::TlsConnector::new() {
+            Ok(c) => builder.tls_connector(std::sync::Arc::new(c)).build(),
+            Err(e) => {
+                log::warn!("native-tls init failed ({e}); HTTPS may not work");
+                builder.build()
+            }
+        }
+    }).clone()
+}
 
 /// Parse `MAJOR.MINOR.PATCH`(-ish) into a comparable tuple.
 fn semver(s: &str) -> (u32, u32, u32) {
@@ -31,7 +50,7 @@ pub fn latest_library() -> Result<(String, String, String, String), String> {
     let (owner, repo) = crate::controller::official_owner_repo()
         .ok_or("no official content repository configured in repositories.toml")?;
     let url = format!("https://api.github.com/repos/{}/{}/tags?per_page=100", owner, repo);
-    let body = ureq::get(&url)
+    let body = http_agent().get(&url)
         .set("User-Agent", UA)
         .set("Accept", "application/vnd.github+json")
         .timeout(std::time::Duration::from_secs(15))
@@ -63,7 +82,7 @@ pub fn sync_library(owner: &str, repo: &str, tag: &str) -> Result<(), String> {
     let root = crate::controller::fetched_library_root()
         .ok_or("could not resolve the user data directory")?;
     let url = format!("https://codeload.github.com/{}/{}/zip/refs/tags/{}", owner, repo, tag);
-    let resp = ureq::get(&url)
+    let resp = http_agent().get(&url)
         .set("User-Agent", UA)
         .timeout(std::time::Duration::from_secs(120))
         .call().map_err(|e| e.to_string())?;
