@@ -2696,6 +2696,12 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         }
     });
 
+    // Movie/shader exclusivity: when applying would destroy the other type on a display,
+    // we stash the request, show a confirm dialog, and only proceed once the user clicks
+    // Apply (which re-invokes on_apply_to_monitor with `force_conflict_apply` set).
+    let force_conflict_apply = Rc::new(std::cell::Cell::new(false));
+    let pending_conflict = Rc::new(std::cell::RefCell::new(None::<(i32, String)>));
+
     let app_state_apply = app_state.clone();
     let command_tx_apply = command_tx.clone();
     let layers_model_apply = layers_model.clone();
@@ -2705,7 +2711,52 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     let pending_close_apply = pending_close.clone();
     let push_toast_apply = push_toast.clone();
     let ui_handle_apply = ui.as_weak();
+    let force_apply_a = force_conflict_apply.clone();
+    let pending_conflict_a = pending_conflict.clone();
     ui.on_apply_to_monitor(move |mon_idx, wall_name| {
+        let forced = force_apply_a.replace(false);
+        // ── Conflict detection (read-only) ──────────────────────────────────────
+        // A display holds EITHER shaders OR one movie. Detect whether this apply would
+        // remove the other type and, if so, confirm first (unless already confirmed).
+        if !forced {
+            let conflict: Option<String> = {
+                let state = app_state_apply.read().unwrap();
+                let wp = state.wallpapers.iter().find(|w| wall_name == w.name).map(|w| w.path.clone());
+                match (wp, state.monitors.get(mon_idx as usize)) {
+                    (Some(path), Some(monitor)) => {
+                        let is_video = |p: &std::path::Path| controller::video_wallpaper_path(p).is_some();
+                        let applying_movie = is_video(&path);
+                        let already = monitor.layers.iter().any(|l| l.wallpaper_path == path);
+                        let has_movie = monitor.layers.iter().any(|l| is_video(&l.wallpaper_path));
+                        let has_shader = monitor.layers.iter().any(|l| !is_video(&l.wallpaper_path));
+                        let mon_name = monitor.name.clone();
+                        let span = state.span_monitors;
+                        let primary_has_shader = controller::primary_monitor(&state.monitors)
+                            .map(|m| m.layers.iter().any(|l| !is_video(&l.wallpaper_path))).unwrap_or(false);
+                        if already {
+                            None // toggling off - never a conflict
+                        } else if applying_movie && span && primary_has_shader {
+                            Some("Compositing shaders with movie-based wallpapers is not supported. Applying this movie wallpaper will remove the shader layers spanning your displays.".to_string())
+                        } else if applying_movie && has_shader {
+                            Some(format!("Compositing shaders with movie-based wallpapers is not supported. Applying this movie wallpaper will remove the current shader layers on \"{mon_name}\".", ))
+                        } else if !applying_movie && has_movie {
+                            Some(format!("Compositing shaders with movie-based wallpapers is not supported. Applying this shader will remove the current movie wallpaper on \"{mon_name}\".", ))
+                        } else {
+                            None // empty display, or movie-replaces-movie (silent)
+                        }
+                    }
+                    _ => None,
+                }
+            };
+            if let Some(msg) = conflict {
+                if let Some(ui) = ui_handle_apply.upgrade() {
+                    *pending_conflict_a.borrow_mut() = Some((mon_idx, wall_name.to_string()));
+                    ui.set_conflict_message(SharedString::from(msg));
+                    ui.set_show_conflict_dialog(true);
+                }
+                return;
+            }
+        }
         // Applying a shader makes that monitor the Compositor's active selection,
         // so switching tabs shows it selected (and its layers) without an extra
         // click - keeps the Library and Compositor in sync.
@@ -2718,10 +2769,23 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         let mut changed = false;
         {
         let mut state = app_state_apply.write().unwrap();
-        let span_now = state.span_monitors;
         let wallpaper_info = state.wallpapers.iter().find(|w| wall_name == w.name).map(|w| (w.path.clone(), w.name.clone()));
 
         if let Some((path, name)) = wallpaper_info {
+            let applying_movie = controller::video_wallpaper_path(&path).is_some();
+            let is_video = |p: &std::path::Path| controller::video_wallpaper_path(p).is_some();
+            // Movies never span and are exclusive: turn off span and clear the spanning
+            // shaders (the primary's layers) before placing a movie on any display.
+            let already_here = state.monitors.get(mon_idx as usize)
+                .map(|m| m.layers.iter().any(|l| l.wallpaper_path == path)).unwrap_or(false);
+            if applying_movie && !already_here && state.span_monitors {
+                state.span_monitors = false;
+                let primary_idx = state.monitors.iter().position(|m| m.is_primary)
+                    .unwrap_or(0);
+                if let Some(pm) = state.monitors.get_mut(primary_idx) { pm.layers.clear(); }
+            }
+            let span_now = state.span_monitors;
+
             if let Some(monitor) = state.monitors.get_mut(mon_idx as usize) {
                 let mon_name = monitor.name.clone();
                 let shader_name = name.clone();
@@ -2732,6 +2796,14 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                     added = false;
                 } else {
                     added = true;
+                    // Enforce exclusivity on THIS display: a movie clears everything
+                    // (shaders + any old movie = silent replace); a shader clears only a
+                    // movie. Same type stacks as layers (shaders) as before.
+                    if applying_movie {
+                        monitor.layers.clear();
+                    } else {
+                        monitor.layers.retain(|l| !is_video(&l.wallpaper_path));
+                    }
                     // Insert at the TOP of the list (index 0) so the shader the
                     // user just activated composites on top and is immediately
                     // visible - they can move it down later to reorder.
@@ -2803,6 +2875,11 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         // plain Reload.  sync_wallpaper_windows re-reads app_state, so the guard
         // above MUST be released first.
         if changed {
+            // Applying a movie may have turned span off - reflect that in the UI toggle.
+            if let Some(ui) = ui_handle_apply.upgrade() {
+                let span = app_state_apply.read().map(|s| s.span_monitors).unwrap_or(false);
+                ui.set_span_monitors(span);
+            }
             sync_wallpaper_windows(
                 app_state_apply.clone(),
                 command_tx_apply.clone(),
@@ -2810,6 +2887,20 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                 store_apply.clone(),
                 pending_close_apply.clone(),
             );
+        }
+    });
+
+    // Confirm a movie/shader exclusivity swap: re-run the stashed apply with the force
+    // flag set so it bypasses the conflict check and performs the destructive replace.
+    let ui_handle_conf = ui.as_weak();
+    let force_apply_c = force_conflict_apply.clone();
+    let pending_conflict_c = pending_conflict.clone();
+    ui.on_conflict_confirmed(move || {
+        if let Some((mon_idx, wall_name)) = pending_conflict_c.borrow_mut().take() {
+            force_apply_c.set(true);
+            if let Some(ui) = ui_handle_conf.upgrade() {
+                ui.invoke_apply_to_monitor(mon_idx, SharedString::from(wall_name));
+            }
         }
     });
 
@@ -3953,11 +4044,17 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             // movie-only desktop should read "inactive", not 0 FPS. Count only visible
             // SHADER layers (path NOT under the import-video dir - cheap, no disk read).
             let video_dir = controller::import_video_dir();
-            let engine_active = app_state_timer.read()
-                .map(|s| s.monitors.iter().any(|m| m.layers.iter().any(|l| l.visible
-                    && !video_dir.as_ref().is_some_and(|vd| l.wallpaper_path.starts_with(vd)))))
-                .unwrap_or(false);
+            let (engine_active, any_movie) = app_state_timer.read()
+                .map(|s| {
+                    let is_movie = |l: &controller::LayerInfo| video_dir.as_ref().is_some_and(|vd| l.wallpaper_path.starts_with(vd));
+                    let active = s.monitors.iter().any(|m| m.layers.iter().any(|l| l.visible && !is_movie(l)));
+                    let movie = s.monitors.iter().any(|m| m.layers.iter().any(|l| is_movie(l)));
+                    (active, movie)
+                })
+                .unwrap_or((false, false));
             ui.set_engine_active(engine_active);
+            // Span is unavailable while a movie wallpaper is active (movies don't span).
+            ui.set_span_disabled(any_movie);
 
             // ── Logs ──
             // Parse each "[LEVEL] message" line into a structured entry with a

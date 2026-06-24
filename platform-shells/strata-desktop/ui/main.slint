@@ -913,6 +913,7 @@ component CompositorCanvas inherits Rectangle {
     in property <[MonitorItem]> monitors;
     in property <int>  selected-index;
     in property <bool> span;
+    in property <bool> span-disabled; // true when a movie wallpaper is active (movies don't span)
     in property <int>  canvas-min-x;
     in property <int>  canvas-min-y;
     in property <int>  canvas-max-x;
@@ -1065,20 +1066,22 @@ component CompositorCanvas inherits Rectangle {
         rf-ta := TouchArea { clicked => { root.refresh(); } mouse-cursor: pointer; }
     }
 
-    // Bottom-right span switch
+    // Bottom-right span switch. Disabled while a movie wallpaper is active - a single
+    // video clip can't be sliced across monitors, so spanning doesn't apply to movies.
     Rectangle {
         visible: !root.editing;
         x: parent.width - 250px; y: parent.height - 72px;
         width: 234px; height: 54px; border-radius: 14px;
+        opacity: root.span-disabled ? 0.45 : 1.0;
         background: root.chip-bg; border-width: 1px; border-color: root.chip-border;
         HorizontalLayout {
             padding-left: 14px; padding-right: 14px; spacing: 10px;
             VerticalLayout {
                 horizontal-stretch: 1; alignment: center; spacing: 2px;
                 Text { text: "SPAN MONITORS"; color: root.fg; font-size: 10px; font-weight: 800; letter-spacing: 1px; }
-                Text { text: "Treat displays as one canvas"; color: root.fg-muted; font-size: 8px; }
+                Text { text: root.span-disabled ? "Unavailable with a movie wallpaper" : "Treat displays as one canvas"; color: root.fg-muted; font-size: 8px; }
             }
-            VerticalLayout { alignment: center; Toggle { checked: root.span; toggled(v) => { root.span-toggled(v); } } }
+            VerticalLayout { alignment: center; Toggle { checked: root.span; enabled: !root.span-disabled; toggled(v) => { root.span-toggled(v); } } }
         }
     }
 
@@ -2346,6 +2349,12 @@ export component AppWindow inherits Window {
     in property <int> canvas-max-y: 1080;
 
     in-out property <bool> span-monitors:  false;
+    in property <bool> span-disabled: false; // true while any movie wallpaper is active
+
+    // Movie/shader exclusivity confirmation dialog (apply removes the conflicting type).
+    in-out property <bool>   show-conflict-dialog: false;
+    in-out property <string> conflict-message: "";
+    callback conflict-confirmed();
     in-out property <bool> debug-overlay:  false;
     in-out property <bool> autostart:      false;
     in-out property <bool> disable-mpo:    false;
@@ -2774,7 +2783,7 @@ export component AppWindow inherits Window {
                     spacing: 24px;
                     CompositorCanvas {
                         horizontal-stretch: 1;
-                        monitors: root.monitors; selected-index: root.selected-monitor-index; span: root.span-monitors;
+                        monitors: root.monitors; selected-index: root.selected-monitor-index; span: root.span-monitors; span-disabled: root.span-disabled;
                         canvas-min-x: root.canvas-min-x; canvas-min-y: root.canvas-min-y;
                         canvas-max-x: root.canvas-max-x; canvas-max-y: root.canvas-max-y;
                         editing-layer <=> root.editing-layer;
@@ -2817,7 +2826,7 @@ export component AppWindow inherits Window {
                     padding: 4px; spacing: 24px;
                     CompositorCanvas {
                         height: 300px;
-                        monitors: root.monitors; selected-index: root.selected-monitor-index; span: root.span-monitors;
+                        monitors: root.monitors; selected-index: root.selected-monitor-index; span: root.span-monitors; span-disabled: root.span-disabled;
                         canvas-min-x: root.canvas-min-x; canvas-min-y: root.canvas-min-y;
                         canvas-max-x: root.canvas-max-x; canvas-max-y: root.canvas-max-y;
                         editing-layer <=> root.editing-layer;
@@ -3144,6 +3153,46 @@ export component AppWindow inherits Window {
                         clicked => {
                             root.video-import-confirmed(vid-name-input.text);
                             root.show-video-name-dialog = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Movie/shader exclusivity confirmation dialog ─────────────────────────
+    // A display can hold EITHER shader layers OR one movie - not both. Applying the
+    // other type removes the current one; this confirms that destructive swap.
+    if root.show-conflict-dialog : Rectangle {
+        background: #000000aa;
+        TouchArea { clicked => { root.show-conflict-dialog = false; } }
+        Rectangle {
+            width: 440px; height: conflict-col.preferred-height + 48px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: Theme.palette.card;
+            border-radius: 16px; border-width: 1px; border-color: Theme.palette.border;
+            drop-shadow-blur: 40px; drop-shadow-color: #00000066;
+            TouchArea {}
+            conflict-col := VerticalLayout {
+                padding: 24px; spacing: 14px;
+                Text { text: "Replace current wallpaper?"; font-size: 16px; font-weight: 700; color: Theme.palette.text; }
+                Text { text: root.conflict-message; font-size: 13px; color: Theme.palette.text-muted; wrap: word-wrap; }
+                HorizontalLayout {
+                    spacing: 12px; alignment: end;
+                    Rectangle {
+                        width: 96px; height: 44px; border-radius: 12px;
+                        background: conflict-cancel-ta.has-hover ? Theme.palette.card-hover : transparent;
+                        border-width: 1px; border-color: Theme.palette.border;
+                        Text { text: "CANCEL"; color: Theme.palette.text-muted; font-size: 11px; font-weight: 800; letter-spacing: 1px;
+                               horizontal-alignment: center; vertical-alignment: center; }
+                        conflict-cancel-ta := TouchArea { clicked => { root.show-conflict-dialog = false; } mouse-cursor: pointer; }
+                    }
+                    PillButton {
+                        width: 140px; btn-height: 44px; text: "APPLY"; icon: "check";
+                        clicked => {
+                            root.show-conflict-dialog = false;
+                            root.conflict-confirmed();
                         }
                     }
                 }
