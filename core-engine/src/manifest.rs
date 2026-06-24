@@ -23,6 +23,11 @@ pub struct WallpaperInfo {
     pub tags: Vec<String>,
     #[serde(default)]
     pub passes: Vec<String>,
+    /// Set for a VIDEO (movie .mp4) wallpaper: the video file name relative to the
+    /// wallpaper folder. When present this is a video wallpaper (no shader passes) and
+    /// the engine plays it via the platform video decoder instead of building pipelines.
+    #[serde(default)]
+    pub video: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +133,7 @@ impl WallpaperConfig {
                         source_url: String::new(),
                         tags: Vec::new(),
                         passes: vec!["image".to_string()],
+                        video: None,
                     },
                     render_targets,
                 });
