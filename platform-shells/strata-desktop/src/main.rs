@@ -855,6 +855,26 @@ fn monitor_covered(origin: (i32, i32), size: (u32, u32)) -> bool {
 #[cfg(not(windows))]
 fn monitor_covered(_origin: (i32, i32), _size: (u32, u32)) -> bool { false }
 
+/// True if the main window is currently hidden from the user: minimized OR DWM-cloaked
+/// (virtual-desktop switch, certain dormancy). Polled by the UI timer so the software
+/// renderer gets a guaranteed full-repaint nudge when the window comes back - the winit
+/// Occluded/Focused events don't reliably fire for taskbar-minimize or long dormancy.
+#[cfg(windows)]
+fn window_hidden(hwnd: isize) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::IsIconic;
+    use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    if hwnd == 0 { return false; }
+    unsafe {
+        if IsIconic(hwnd) != 0 { return true; }
+        let mut cloaked: u32 = 0;
+        DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED as u32,
+            (&mut cloaked as *mut u32).cast(), std::mem::size_of::<u32>() as u32);
+        cloaked != 0
+    }
+}
+#[cfg(not(windows))]
+fn window_hidden(_hwnd: isize) -> bool { false }
+
 /// Pause each video wallpaper whose monitor is covered by a fullscreen app, resume it when
 /// uncovered. Only sends on a state change. Called on a slow throttle from the UI timer so
 /// gaming / fullscreen video drops the movie's decode to ~0.
@@ -1881,6 +1901,12 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
 
     // Library sort mode (persisted in config). Shared by every model rebuild + the
     // sort menu so the chosen order survives refresh / import / delete.
+    // Full-repaint nudge flag for the software UI renderer (declared early so wallpaper-
+    // apply and other handlers can request a repaint). The timer turns this into a ±2px
+    // resize that forces softbuffer to repaint the whole window (see the timer + the
+    // window-state poll below).
+    let needs_repaint = std::rc::Rc::new(std::cell::Cell::new(false));
+
     let sort_mode = Rc::new(std::cell::RefCell::new(config.library_sort.clone()));
     ui.set_sort_mode(SharedString::from(config.library_sort.as_str()));
     // Restore the per-group collapse state, and persist it whenever a header is toggled.
@@ -2784,6 +2810,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     let ui_handle_apply = ui.as_weak();
     let force_apply_a = force_conflict_apply.clone();
     let pending_conflict_a = pending_conflict.clone();
+    let needs_repaint_apply = needs_repaint.clone();
     ui.on_apply_to_monitor(move |mon_idx, wall_name| {
         let forced = force_apply_a.replace(false);
         // ── Conflict detection (read-only) ──────────────────────────────────────
@@ -2958,6 +2985,10 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                 store_apply.clone(),
                 pending_close_apply.clone(),
             );
+            // Creating the wallpaper window(s) does heavy GPU work on the shared device;
+            // force a full UI repaint so the software-rendered window never lingers stale
+            // (this is the "transparent UI after applying a parallax wallpaper" case).
+            needs_repaint_apply.set(true);
         }
     });
 
@@ -3751,8 +3782,11 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     // restore it next tick (two resize events → full repaint). `restore_size` carries
     // the pending revert.
     let restore_size = std::cell::Cell::new(None::<slint::PhysicalSize>);
-    let needs_repaint = std::rc::Rc::new(std::cell::Cell::new(false));
     let needs_repaint_timer = needs_repaint.clone();
+    // Last observed "window hidden" state (minimized OR DWM-cloaked). Polled each tick so a
+    // restore ALWAYS triggers a full repaint, regardless of whether winit emitted an
+    // Occluded/Focused event (taskbar-minimize and dormancy often don't).
+    let was_hidden = std::cell::Cell::new(false);
     // Tracks whether the main window is actually on-screen (not hidden to tray /
     // minimized). Used to skip work the user can't see - e.g. the parallax preview's
     // offscreen GPU render. Updated on tray show/hide and winit Occluded events.
@@ -4082,6 +4116,19 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                 move_settle_timer.set(None);
                 needs_repaint_timer.set(true);
             }
+        }
+
+        // Event-independent restore detection: poll whether the window is hidden
+        // (minimized / DWM-cloaked) and force a full repaint on the hidden->shown edge.
+        // This catches the cases winit's Occluded/Focused miss - taskbar-minimize and
+        // waking a long-dormant window - which is what left the software UI transparent.
+        #[cfg(target_os = "windows")]
+        {
+            let hidden = window_hidden(ui_hwnd_timer.get());
+            if was_hidden.get() && !hidden {
+                needs_repaint_timer.set(true);
+            }
+            was_hidden.set(hidden);
         }
 
         if let Some(ui) = ui_handle_timer.upgrade() {
