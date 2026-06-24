@@ -36,7 +36,15 @@ pub struct Config {
     // The check runs at most ~weekly so launches stay fast and offline-friendly.
     #[serde(default)]
     pub last_update_check: i64,
+    // Library sort order: "default" | "name-asc" | "name-desc" | "date-newest" | "date-oldest".
+    #[serde(default = "default_library_sort")]
+    pub library_sort: String,
     pub monitors: Vec<MonitorConfig>,
+}
+
+/// Default library sort: bundled shaders A-Z with user content at the bottom.
+pub fn default_library_sort() -> String {
+    "default".to_string()
 }
 
 /// Default installed asset-library version (matches the shipped Strata-Library).
@@ -110,6 +118,7 @@ impl Config {
             shader_quality: default_shader_quality(),
             library_version: default_library_version(),
             last_update_check: 0,
+            library_sort: default_library_sort(),
             monitors: Vec::new(),
         }
     }

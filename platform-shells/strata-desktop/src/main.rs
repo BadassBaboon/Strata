@@ -1590,6 +1590,60 @@ fn notify_already_running() {
     unsafe { MessageBoxW(0, text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONINFORMATION); }
 }
 
+/// Filesystem "added" time for a wallpaper (its dir's mtime). Used by date sorts.
+fn entry_mtime(w: &controller::WallpaperEntry) -> Option<std::time::SystemTime> {
+    std::fs::metadata(&w.path).and_then(|m| m.modified()).ok()
+}
+
+/// Sort the wallpaper list IN PLACE per the chosen mode. Done on `state.wallpapers` itself
+/// (not just the view model) so row indices stay consistent with the grid - the delete
+/// handler resolves by index. Modes: "default" (bundled shaders A-Z, then user content
+/// A-Z), "name-asc", "name-desc", "date-newest", "date-oldest".
+fn sort_entries(entries: &mut [controller::WallpaperEntry], sort_mode: &str) {
+    match sort_mode {
+        "name-asc"    => entries.sort_by_cached_key(|w| w.name.to_lowercase()),
+        "name-desc"   => entries.sort_by_cached_key(|w| std::cmp::Reverse(w.name.to_lowercase())),
+        "date-newest" => entries.sort_by_cached_key(|w| std::cmp::Reverse(entry_mtime(w))),
+        "date-oldest" => entries.sort_by_cached_key(|w| entry_mtime(w)),
+        // "default": user content (parallax / imported / movie) sinks to the bottom,
+        // each group alphabetical.
+        _ => entries.sort_by_cached_key(|w| (controller::is_user_deletable(&w.path), w.name.to_lowercase())),
+    }
+}
+
+/// Build the Library's Slint card list from already-ordered entries (call `sort_entries`
+/// on `state.wallpapers` first). Centralised so every rebuild stays consistent.
+fn build_library_items(
+    wallpapers: &[controller::WallpaperEntry],
+    monitors: &[controller::MonitorInfo],
+) -> Vec<WallpaperItem> {
+    wallpapers.iter().map(|w| {
+        let mut item = WallpaperItem::default();
+        item.name = SharedString::from(&w.name);
+        item.author = SharedString::from(&w.author);
+        item.source_url = SharedString::from(&w.source_url);
+        item.tags = ModelRc::from(Rc::new(VecModel::from(
+            w.tags.iter().map(|t| SharedString::from(t.as_str())).collect::<Vec<_>>())));
+        item.is_parallax = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Parallax"));
+        item.is_imported = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Imported"))
+            || controller::is_user_deletable(&w.path);
+        item.is_video = w.tags.iter().any(|t| t.eq_ignore_ascii_case("video"));
+        item.visible = true;
+        if let Some(ref thumb) = w.thumbnail {
+            if let Ok(slint_img) = Image::load_from_path(thumb) {
+                item.thumbnail = slint_img;
+                item.has_thumbnail = true;
+            }
+        }
+        let counts: Vec<i32> = monitors.iter()
+            .map(|m| m.layers.iter().filter(|l| l.wallpaper_path == w.path).count() as i32)
+            .collect();
+        item.is_active = counts.iter().any(|&c| c > 0);
+        item.usage_counts = Rc::new(VecModel::from(counts)).into();
+        item
+    }).collect()
+}
+
 fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Enforce a single running instance - a second launch exits immediately instead
     // of spawning duplicate tray icons / wallpaper windows fighting over the desktop.
@@ -1771,45 +1825,23 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     #[cfg(target_os = "windows")]
     let hidden_to_tray = std::rc::Rc::new(std::cell::Cell::new(false));
 
-    // Set up Wallpaper Library: bundled library + user roots (parallax + imports).
-    let wallpaper_entries = controller::scan_all_wallpapers();
-    {
-        let mut state = app_state.write().unwrap();
-        state.wallpapers = wallpaper_entries.clone();
-    }
+    // Library sort mode (persisted in config). Shared by every model rebuild + the
+    // sort menu so the chosen order survives refresh / import / delete.
+    let sort_mode = Rc::new(std::cell::RefCell::new(config.library_sort.clone()));
+    ui.set_sort_mode(SharedString::from(config.library_sort.as_str()));
 
-    // Snapshot monitors so each card shows its applied-monitor avatars / active
-    // glow from the restored config on first paint.
-    let monitor_snapshot = { app_state.read().unwrap().monitors.clone() };
-    let wallpapers_model = Rc::new(VecModel::<WallpaperItem>::from(
-        wallpaper_entries.iter().map(|w| {
-            let mut item = WallpaperItem::default();
-            item.name = SharedString::from(&w.name);
-            item.author = SharedString::from(&w.author);
-            item.source_url = SharedString::from(&w.source_url);
-            item.tags = ModelRc::from(Rc::new(VecModel::from(w.tags.iter().map(|t| SharedString::from(t.as_str())).collect::<Vec<_>>())));
-            item.is_parallax = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Parallax"));
-            // Deletability is by LOCATION (user import/parallax/video dirs), not a tag -
-            // tags aren't persisted, so a tag-only check loses the delete button on
-            // restart. is_user_deletable is stable across restarts.
-            item.is_imported = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Imported"))
-                || controller::is_user_deletable(&w.path);
-            item.is_video = w.tags.iter().any(|t| t.eq_ignore_ascii_case("video"));
-            item.visible = true;
-            if let Some(ref thumb) = w.thumbnail {
-                if let Ok(slint_img) = Image::load_from_path(thumb) {
-                    item.thumbnail = slint_img;
-                    item.has_thumbnail = true;
-                }
-            }
-            let counts: Vec<i32> = monitor_snapshot.iter()
-                .map(|m| m.layers.iter().filter(|l| l.wallpaper_path == w.path).count() as i32)
-                .collect();
-            item.is_active = counts.iter().any(|&c| c > 0);
-            item.usage_counts = Rc::new(VecModel::from(counts)).into();
-            item
-        }).collect::<Vec<_>>()
-    ));
+    // Set up Wallpaper Library: bundled library + user roots (parallax + imports).
+    let wallpapers_model = {
+        let mut entries = controller::scan_all_wallpapers();
+        sort_entries(&mut entries, &sort_mode.borrow());
+        {
+            let mut state = app_state.write().unwrap();
+            state.wallpapers = entries.clone();
+        }
+        // Snapshot monitors so each card shows its applied-monitor avatars on first paint.
+        let monitor_snapshot = { app_state.read().unwrap().monitors.clone() };
+        Rc::new(VecModel::<WallpaperItem>::from(build_library_items(&entries, &monitor_snapshot)))
+    };
     ui.set_wallpapers(ModelRc::from(wallpapers_model.clone()));
 
     // Set up Monitors and Canvas
@@ -2002,6 +2034,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     let thumbnails_busy_import = thumbnails_busy.clone();
     let ui_handle_import = ui.as_weak();
     let pending_video_set = pending_video_import.clone();
+    let sort_mode_import = sort_mode.clone();
     ui.on_import_requested(move || {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Wallpaper (.mp4, .webm, .zip, .json)", &["mp4", "webm", "zip", "json"])
@@ -2057,37 +2090,12 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             match import_result {
                 Ok(_) => {
                     let mut state = app_state_import.write().unwrap();
-                    let new_wallpapers = controller::scan_all_wallpapers();
+                    let mut new_wallpapers = controller::scan_all_wallpapers();
+                    sort_entries(&mut new_wallpapers, &sort_mode_import.borrow());
                     state.wallpapers = new_wallpapers.clone();
                     let monitors = state.monitors.clone();
 
-                    let slint_walls: Vec<WallpaperItem> = new_wallpapers.iter().map(|w| {
-                        let mut item = WallpaperItem::default();
-                        item.name = SharedString::from(&w.name);
-                        item.author = SharedString::from(&w.author);
-                        item.source_url = SharedString::from(&w.source_url);
-                        item.tags = ModelRc::from(Rc::new(VecModel::from(w.tags.iter().map(|t| SharedString::from(t.as_str())).collect::<Vec<_>>())));
-                        item.is_parallax = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Parallax"));
-                        // Deletability is by LOCATION (user import/parallax/video dirs), not a tag -
-            // tags aren't persisted, so a tag-only check loses the delete button on
-            // restart. is_user_deletable is stable across restarts.
-            item.is_imported = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Imported"))
-                || controller::is_user_deletable(&w.path);
-                        item.is_video = w.tags.iter().any(|t| t.eq_ignore_ascii_case("video"));
-                        item.visible = true;
-                        if let Some(ref thumb) = w.thumbnail {
-                            if let Ok(slint_img) = Image::load_from_path(thumb) {
-                                item.thumbnail = slint_img;
-                                item.has_thumbnail = true;
-                            }
-                        }
-                        let counts: Vec<i32> = monitors.iter()
-                            .map(|m| m.layers.iter().filter(|l| l.wallpaper_path == w.path).count() as i32)
-                            .collect();
-                        item.is_active = counts.iter().any(|&c| c > 0);
-                        item.usage_counts = Rc::new(VecModel::from(counts)).into();
-                        item
-                    }).collect();
+                    let slint_walls = build_library_items(&new_wallpapers, &monitors);
                     let dirs: Vec<std::path::PathBuf> = new_wallpapers.iter().map(|w| w.path.clone()).collect();
                     drop(state);
                     wallpapers_model_import.set_vec(slint_walls);
@@ -2245,6 +2253,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     let push_toast_refresh = push_toast.clone();
     let thumb_tx_refresh = thumb_tx.clone();
     let thumbnails_busy_refresh = thumbnails_busy.clone();
+    let sort_mode_refresh = sort_mode.clone();
     ui.on_refresh_library(move || {
         // Already refreshing? Don't rescan or kick off a second generator - just
         // tell the user. This stops rapid clicks from pinning the CPU.
@@ -2253,7 +2262,8 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             return;
         }
         let mut state = app_state_refresh.write().unwrap();
-        let scanned = controller::scan_all_wallpapers();
+        let mut scanned = controller::scan_all_wallpapers();
+        sort_entries(&mut scanned, &sort_mode_refresh.borrow());
         // Only rebuild the Slint model when the shader SET actually changed (added/
         // removed/renamed or a thumbnail appeared/disappeared). Re-decoding every
         // thumbnail PNG into a fresh GPU texture on each refresh is what made RAM
@@ -2268,33 +2278,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         if set_changed {
             state.wallpapers = scanned.clone();
             let monitors = state.monitors.clone();
-            let walls: Vec<WallpaperItem> = scanned.iter().map(|w| {
-                let mut item = WallpaperItem::default();
-                item.name = SharedString::from(&w.name);
-                item.author = SharedString::from(&w.author);
-                item.source_url = SharedString::from(&w.source_url);
-                item.tags = ModelRc::from(Rc::new(VecModel::from(w.tags.iter().map(|t| SharedString::from(t.as_str())).collect::<Vec<_>>())));
-                item.is_parallax = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Parallax"));
-                // Deletability is by LOCATION (user import/parallax/video dirs), not a tag -
-            // tags aren't persisted, so a tag-only check loses the delete button on
-            // restart. is_user_deletable is stable across restarts.
-            item.is_imported = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Imported"))
-                || controller::is_user_deletable(&w.path);
-                item.is_video = w.tags.iter().any(|t| t.eq_ignore_ascii_case("video"));
-                item.visible = true;
-                if let Some(ref thumb) = w.thumbnail {
-                    if let Ok(slint_img) = Image::load_from_path(thumb) {
-                        item.thumbnail = slint_img;
-                        item.has_thumbnail = true;
-                    }
-                }
-                let counts: Vec<i32> = monitors.iter()
-                    .map(|m| m.layers.iter().filter(|l| l.wallpaper_path == w.path).count() as i32)
-                    .collect();
-                item.is_active = counts.iter().any(|&c| c > 0);
-                item.usage_counts = Rc::new(VecModel::from(counts)).into();
-                item
-            }).collect();
+            let walls = build_library_items(&scanned, &monitors);
             drop(state);
             wallpapers_model_refresh.set_vec(walls);
             log::info!("Library refreshed: {} wallpaper(s)", count);
@@ -2306,6 +2290,26 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         // Generate any missing thumbnails in the background (spinner shows progress).
         // No-op if every shader already has one.
         spawn_thumbnail_generation(dirs, thumb_tx_refresh.clone(), thumbnails_busy_refresh.clone());
+    });
+
+    // ── Library sort: reorder state.wallpapers + rebuild the grid, persist choice ──
+    let ui_sort = ui.as_weak();
+    let app_state_sort = app_state.clone();
+    let wallpapers_model_sort = wallpapers_model.clone();
+    let sort_mode_sort = sort_mode.clone();
+    ui.on_sort_changed(move |mode| {
+        *sort_mode_sort.borrow_mut() = mode.to_string();
+        let mut cfg = config::Config::load();
+        cfg.library_sort = mode.to_string();
+        cfg.save().ok();
+        let items = {
+            let mut state = app_state_sort.write().unwrap();
+            sort_entries(&mut state.wallpapers, &mode);
+            let monitors = state.monitors.clone();
+            build_library_items(&state.wallpapers, &monitors)
+        };
+        wallpapers_model_sort.set_vec(items);
+        if let Some(ui) = ui_sort.upgrade() { ui.set_sort_mode(mode); }
     });
 
     // ── Delete a wallpaper (parallax assets get a trash button) ─────────────
@@ -2738,9 +2742,9 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                         } else if applying_movie && span && primary_has_shader {
                             Some("Compositing shaders with movie-based wallpapers is not supported. Applying this movie wallpaper will remove the shader layers spanning your displays.".to_string())
                         } else if applying_movie && has_shader {
-                            Some(format!("Compositing shaders with movie-based wallpapers is not supported. Applying this movie wallpaper will remove the current shader layers on \"{mon_name}\".", ))
+                            Some(format!("Compositing shaders with movie-based wallpapers is not supported. Applying this movie wallpaper will remove the current shader layers on {mon_name}."))
                         } else if !applying_movie && has_movie {
-                            Some(format!("Compositing shaders with movie-based wallpapers is not supported. Applying this shader will remove the current movie wallpaper on \"{mon_name}\".", ))
+                            Some(format!("Compositing shaders with movie-based wallpapers is not supported. Applying this shader will remove the current movie wallpaper on {mon_name}."))
                         } else {
                             None // empty display, or movie-replaces-movie (silent)
                         }
