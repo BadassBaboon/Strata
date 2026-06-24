@@ -297,3 +297,47 @@ pub fn setup_wallpaper_window(
         log::info!("setup_wallpaper_window: success");
     }
 }
+
+/// True if a true-fullscreen app covers this monitor. Walks top-level windows in Z-order
+/// (top first) and inspects the TOPMOST real (visible, non-cloaked, non-shell) window that
+/// overlaps the monitor: covered iff it spans the whole monitor (incl. the taskbar area -
+/// a merely maximised window leaves the taskbar and doesn't qualify). Per-monitor and
+/// focus-independent, so a fullscreen app on ANOTHER monitor never counts here.
+#[cfg(target_os = "windows")]
+pub fn monitor_covered(origin: (i32, i32), size: (u32, u32)) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{IsWindowVisible, IsIconic, GetClassNameW};
+    use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+
+    struct Ctx { ox: i32, oy: i32, mw: i32, mh: i32, covered: bool, done: bool }
+
+    unsafe extern "system" fn cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let ctx = &mut *(lparam as *mut Ctx);
+        if ctx.done { return 0; }
+        if IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0 { return 1; }
+        let mut cloaked: u32 = 0;
+        DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED as u32,
+            (&mut cloaked as *mut u32).cast(), std::mem::size_of::<u32>() as u32);
+        if cloaked != 0 { return 1; }
+        let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        if GetWindowRect(hwnd, &mut r) == 0 { return 1; }
+        let intersects = r.left < ctx.ox + ctx.mw && r.right > ctx.ox
+            && r.top < ctx.oy + ctx.mh && r.bottom > ctx.oy;
+        if !intersects { return 1; }
+        let mut buf = [0u16; 64];
+        let n = GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32).max(0) as usize;
+        let cls = String::from_utf16_lossy(&buf[..n]);
+        if matches!(cls.as_str(),
+            "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+            | "Windows.UI.Core.CoreWindow" | "XamlExplorerHostIslandWindow"
+        ) { return 1; }
+        // Topmost real window over this monitor: covered iff it fully spans it.
+        ctx.covered = r.left <= ctx.ox && r.top <= ctx.oy
+            && r.right >= ctx.ox + ctx.mw && r.bottom >= ctx.oy + ctx.mh;
+        ctx.done = true;
+        0
+    }
+
+    let mut ctx = Ctx { ox: origin.0, oy: origin.1, mw: size.0 as i32, mh: size.1 as i32, covered: false, done: false };
+    unsafe { EnumWindows(Some(cb), &mut ctx as *mut _ as LPARAM); }
+    ctx.covered
+}

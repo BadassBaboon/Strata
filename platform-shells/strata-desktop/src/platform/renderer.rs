@@ -143,28 +143,13 @@ pub fn run_renderer(
     }
 }
 
-/// True if a fullscreen application (not the desktop/shell) currently covers this
-/// monitor - used to pause the wallpaper (render + video decode) while gaming or
-/// watching fullscreen video, so it costs ~0.
+/// True if a true-fullscreen app covers this monitor (game / borderless video) - used to
+/// pause the wallpaper so it costs ~0. Delegates to the shared, per-monitor, focus-
+/// independent z-order detector so a fullscreen app on ANOTHER monitor never pauses this
+/// one (the old foreground-window check did, blanking unrelated displays).
 #[cfg(windows)]
 fn foreground_app_covers(origin: (i32, i32), size: (u32, u32)) -> bool {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowRect, GetClassNameW};
-    use windows_sys::Win32::Foundation::RECT;
-    unsafe {
-        let fg = GetForegroundWindow();
-        if fg == 0 { return false; }
-        let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
-        if GetWindowRect(fg, &mut r) == 0 { return false; }
-        let (mw, mh) = (size.0 as i32, size.1 as i32);
-        let covers = r.left <= origin.0 && r.top <= origin.1
-            && r.right >= origin.0 + mw && r.bottom >= origin.1 + mh;
-        if !covers { return false; }
-        // The desktop/shell windows "cover" the screen but aren't a fullscreen app.
-        let mut buf = [0u16; 64];
-        let n = GetClassNameW(fg, buf.as_mut_ptr(), buf.len() as i32).max(0) as usize;
-        let cls = String::from_utf16_lossy(&buf[..n]);
-        !matches!(cls.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd")
-    }
+    super::windows::monitor_covered(origin, size)
 }
 
 #[cfg(not(windows))]
@@ -276,7 +261,10 @@ fn run_monitor_loop(
     // Pause-when-covered state: when a fullscreen app covers this monitor we stop
     // rendering and pause the video decoder. Checked at most ~twice a second.
     let mut covered = false;
-    let mut last_cover_check = std::time::Instant::now() - std::time::Duration::from_millis(600);
+    // Start the clock now (not in the past) so the FIRST cover-check is ~500ms out - this
+    // guarantees the wallpaper renders at least one frame before it can ever be paused,
+    // so a freshly-applied shader always paints instead of staying blank until a click.
+    let mut last_cover_check = std::time::Instant::now();
 
     while running.load(Ordering::SeqCst) {
         // ── Telemetry (updated in both idle and active states) ─────────────
