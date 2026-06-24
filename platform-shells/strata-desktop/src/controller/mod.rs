@@ -233,6 +233,17 @@ pub fn fetched_library_root() -> Option<PathBuf> {
     user_data_dir().map(|d| d.join("strata-library"))
 }
 
+/// The version of the library actually installed on disk, read from its `index.toml`
+/// (`library_version = "x.y.z"`). This is the source of truth for "what's installed" -
+/// `config.library_version` can drift (e.g. a library placed/updated out of band), which
+/// makes the UI show a stale version and the updater needlessly re-download.
+pub fn installed_library_version() -> Option<String> {
+    let path = fetched_library_root()?.join("index.toml");
+    let text = std::fs::read_to_string(path).ok()?;
+    let val: toml::Value = toml::from_str(&text).ok()?;
+    val.get("library_version")?.as_str().map(|s| s.to_string())
+}
+
 /// True once at least one shader has been fetched into the library.
 pub fn library_installed() -> bool {
     fetched_library_dir()

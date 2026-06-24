@@ -1708,7 +1708,15 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     ui.set_mouse_sensitivity(config.mouse_sensitivity);
     ui.set_shader_quality(SharedString::from(&config.shader_quality));
     ui.set_update_version_badge(SharedString::from(format!("v{} (LATEST)", env!("CARGO_PKG_VERSION"))));
-    ui.set_lib_update_version_badge(SharedString::from(format!("v{} (LATEST)", config.library_version)));
+    // Trust the version actually on disk (index.toml) over the possibly-stale config, and
+    // reconcile config to it so the updater doesn't needlessly re-download a current library.
+    let lib_version = controller::installed_library_version().unwrap_or_else(|| config.library_version.clone());
+    if lib_version != config.library_version {
+        let mut c = config::Config::load();
+        c.library_version = lib_version.clone();
+        c.save().ok();
+    }
+    ui.set_lib_update_version_badge(SharedString::from(format!("v{} (LATEST)", lib_version)));
 
     // Parallax Studio: populate the depth-model dropdown (heuristic + tiers).
     ui.set_parallax_model_options(ModelRc::from(Rc::new(VecModel::from(
@@ -2187,8 +2195,11 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             if ui.get_lib_update_checking() { return; }
             ui.set_lib_update_checking(true);
             ui.set_lib_update_button_label("WORKING…".into());
-            let current = config::Config::load().library_version;
+            // Compare against what's actually on disk (index.toml), not the config value -
+            // a stale config would make this re-download a library that's already current.
             let installed = controller::library_installed();
+            let current = controller::installed_library_version()
+                .unwrap_or_else(|| config::Config::load().library_version);
             let weak = ui.as_weak();
             std::thread::spawn(move || {
                 // -> Ok(Some(version)) = synced to that version; Ok(None) = already current.
@@ -3479,7 +3490,8 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         const WEEK: i64 = 7 * 24 * 60 * 60;
         if now - cfg.last_update_check >= WEEK {
             let weak = ui.as_weak();
-            let lib_ver = cfg.library_version.clone();
+            // Prefer the on-disk version so a stale config doesn't trigger a re-download.
+            let lib_ver = controller::installed_library_version().unwrap_or_else(|| cfg.library_version.clone());
             let pending = update_toast_pending.clone();
             std::thread::spawn(move || {
                 let app = check_github_latest();
