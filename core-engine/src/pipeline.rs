@@ -692,7 +692,18 @@ void main() {
     ) -> Result<LoadedTexture, String> {
         let img = image::open(path)
             .map_err(|e| format!("Failed to open texture image {:?}: {}", path, e))?;
-        let rgba = img.to_rgba8();
+        // Cap the in-VRAM resolution. Textures are sampled in [0,1] UV, so the on-screen
+        // result is resolution-independent - but a 4K source costs 33 MB as RGBA8. Parallax
+        // wallpapers bind FOUR 4K textures (image/depth/background/mask = ~132 MB each), so
+        // this roughly halves their VRAM with no visible change on <=1440p displays. Only
+        // oversized textures are touched; smaller ones (LUTs, data textures) pass through.
+        const MAX_TEXTURE_DIM: u32 = 2560;
+        let (sw, sh) = (img.width(), img.height());
+        let rgba = if sw.max(sh) > MAX_TEXTURE_DIM {
+            img.resize(MAX_TEXTURE_DIM, MAX_TEXTURE_DIM, image::imageops::FilterType::CatmullRom).to_rgba8()
+        } else {
+            img.to_rgba8()
+        };
         let dimensions = rgba.dimensions();
 
         let size = wgpu::Extent3d {

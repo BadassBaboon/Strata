@@ -238,9 +238,6 @@ pub struct Renderer {
     // shaders (non-parallax), 3 = Only Parallax Studio wallpapers. Layers that
     // don't get the mouse have iMouse zeroed, so a parallax layer auto-animates.
     mouse_mode: u8,
-    // Set for a VIDEO (movie .mp4) wallpaper: owns the decoder + NV12 textures + the
-    // YUV->RGB blit pipeline. When present, `render()` blits video instead of shaders.
-    video: Option<video::VideoLayer>,
 }
 
 /// Reduced-resolution composite target + a fullscreen blit pipeline used to
@@ -354,7 +351,6 @@ impl Renderer {
             quality_scale: 1.0,
             scene: None,
             mouse_mode: 1,
-            video: None,
         })
     }
 
@@ -387,7 +383,6 @@ impl Renderer {
             quality_scale: 1.0,
             scene: None,
             mouse_mode: 1,
-            video: None,
         }
     }
 
@@ -580,32 +575,6 @@ impl Renderer {
         self.pipelines.clear();
     }
 
-    /// Switch this renderer to a VIDEO (movie) wallpaper: drops any shader layers and
-    /// blits the decoder's frames instead. `render()` then takes the video path.
-    pub fn set_video(&mut self, decoder: Box<dyn video::VideoDecoder>) {
-        self.pipelines.clear();
-        self.video = Some(video::VideoLayer::new(&self.context.device, decoder, self.config.format));
-    }
-
-    /// Drop any video layer (back to shader rendering / empty).
-    pub fn clear_video(&mut self) {
-        self.video = None;
-    }
-
-    /// True if a video wallpaper is active. A video has no shader pipelines, so the
-    /// render loop must check this too (not just `pipelines`) to keep rendering it.
-    pub fn has_video(&self) -> bool {
-        self.video.is_some()
-    }
-
-    /// Pause/resume a video wallpaper's decoder (no-op if not a video). The render loop
-    /// calls this when a fullscreen app covers the monitor so the wallpaper costs ~0.
-    pub fn set_video_paused(&self, paused: bool) {
-        if let Some(v) = &self.video {
-            v.set_paused(paused);
-        }
-    }
-
     /// Live-update a layer's spatial rect (no pipeline rebuild) - for the
     /// Compositor's drag preview. Marks the layer "Custom" so render() viewports it.
     pub fn set_layer_transform(&mut self, index: usize, transform: [f32; 4]) {
@@ -623,18 +592,6 @@ impl Renderer {
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::CurrentSurfaceTexture> {
-        // Video wallpaper: poll the decoder FIRST and only acquire/present the surface
-        // when a new frame arrived (after the first). This paces presentation to the
-        // clip's frame rate instead of the monitor's refresh rate - the swapchain keeps
-        // showing the last frame in between, so a 30 fps video costs ~30 presents/s even
-        // on a 170 Hz display.
-        if self.video.is_some() {
-            let new_frame = self.video.as_mut().unwrap().poll(&self.context.queue);
-            if !new_frame && self.video.as_ref().unwrap().ready() {
-                return Ok(());
-            }
-        }
-
         let surface = match &self.surface {
             Some(s) => s,
             None => return Ok(()), // headless: nothing to present
@@ -646,16 +603,7 @@ impl Renderer {
             other => return Err(other),
         };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        if let Some(video) = self.video.as_ref() {
-            // Video wallpaper: blit the (already uploaded) frame - no shader pipeline.
-            let mut encoder = self.context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Video Frame Encoder"),
-            });
-            video.blit(&mut encoder, &view);
-            self.context.queue.submit(std::iter::once(encoder.finish()));
-        } else {
-            self.encode_frame(&view);
-        }
+        self.encode_frame(&view);
         output.present();
         Ok(())
     }

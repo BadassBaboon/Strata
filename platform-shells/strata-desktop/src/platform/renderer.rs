@@ -160,25 +160,11 @@ fn foreground_app_covers(_origin: (i32, i32), _size: (u32, u32)) -> bool { false
 /// layers yet). Otherwise the shader layers are added bottom-to-top (the top of the UI
 /// list composites on top, Photoshop-style).
 fn apply_layers(renderer: &mut core_engine::Renderer, layers: &[crate::controller::LayerInfo]) {
-    renderer.clear_video();
     renderer.clear_layers();
 
-    #[cfg(windows)]
-    for layer in layers {
-        if !layer.visible { continue; }
-        if let Some(video_path) = crate::controller::video_wallpaper_path(&layer.wallpaper_path) {
-            log::info!("Video wallpaper: opening {}", video_path.display());
-            match crate::video_decode::MfVideoDecoder::new(&video_path) {
-                Ok(dec) => {
-                    log::info!("Video wallpaper: decoder ready, playing");
-                    renderer.set_video(Box::new(dec));
-                    return;
-                }
-                Err(e) => log::error!("Video wallpaper open failed [{}]: {}", video_path.display(), e),
-            }
-        }
-    }
-
+    // NOTE: video wallpapers are NOT handled here - they run in the separate WebView
+    // daemon process (see reconcile_video_daemon in main.rs), so a video monitor never
+    // gets a wgpu render thread. This path only builds shader layers.
     for layer in layers.iter().rev() {
         if !layer.visible { continue; }
         if let Err(e) = renderer.add_layer(
@@ -282,9 +268,7 @@ fn run_monitor_loop(
         // ── Idle path: no layers assigned ─────────────────────────────────
         // Paint one black frame so the desktop background is cleared, then
         // block on the command channel.  An empty monitor now costs ~0 % CPU.
-        // A VIDEO wallpaper has no shader pipelines but must keep rendering, so it
-        // is NOT idle.
-        if renderer.pipelines.is_empty() && !renderer.has_video() {
+        if renderer.pipelines.is_empty() {
             if !painted_empty {
                 match renderer.render() {
                     Ok(_) => painted_empty = true,
@@ -319,20 +303,19 @@ fn run_monitor_loop(
         }
 
         // A command may have cleared every layer - re-check before drawing so
-        // we drop straight into the idle path next iteration. A video wallpaper
-        // keeps rendering even with no shader pipelines.
-        if renderer.pipelines.is_empty() && !renderer.has_video() {
+        // we drop straight into the idle path next iteration.
+        if renderer.pipelines.is_empty() {
             continue;
         }
 
-        // Pause-when-covered: if a fullscreen app (game, maximized video) covers this
-        // monitor, stop rendering AND pause the video decoder so the wallpaper costs ~0.
+        // Pause-when-covered: if a fullscreen app (game) covers this monitor, stop
+        // rendering the shader so it costs ~0 (video wallpapers pause separately, in the
+        // daemon, via the main-thread cover check).
         if last_cover_check.elapsed() >= std::time::Duration::from_millis(500) {
             last_cover_check = std::time::Instant::now();
             let now_covered = foreground_app_covers(monitor_origin, (renderer.size.width, renderer.size.height));
             if now_covered != covered {
                 covered = now_covered;
-                renderer.set_video_paused(covered);
                 log::info!("Monitor {:?} wallpaper {}", window_id,
                     if covered { "paused (fullscreen app on top)" } else { "resumed" });
             }

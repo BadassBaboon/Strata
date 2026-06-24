@@ -12,7 +12,6 @@
 //! without the renderer knowing the difference.
 
 #![cfg(windows)]
-#![allow(dead_code)] // public API used once the video render path + import flow land (phases 3-4)
 
 use core_engine::video::{VideoDecoder, VideoFrame};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,7 +26,6 @@ use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITH
 struct Shared {
     frame: Mutex<Option<VideoFrame>>,
     stop: AtomicBool,
-    pause: AtomicBool,
 }
 
 pub struct MfVideoDecoder {
@@ -44,7 +42,6 @@ impl MfVideoDecoder {
         let shared = Arc::new(Shared {
             frame: Mutex::new(None),
             stop: AtomicBool::new(false),
-            pause: AtomicBool::new(false),
         });
         let path = path.to_path_buf();
         let shared_worker = shared.clone();
@@ -69,9 +66,6 @@ impl VideoDecoder for MfVideoDecoder {
     }
     fn next_frame(&mut self) -> Option<VideoFrame> {
         self.shared.frame.lock().ok().and_then(|mut s| s.take())
-    }
-    fn set_paused(&self, paused: bool) {
-        self.shared.pause.store(paused, Ordering::Relaxed);
     }
 }
 
@@ -154,14 +148,6 @@ fn decode_loop(
         let mut frame_count: u64 = 0;
 
         while !shared.stop.load(Ordering::Relaxed) {
-            // Covered by a fullscreen app: do no decoding at all (CPU ~0). Drop the time
-            // base so playback re-paces from the next frame on resume (no catch-up burst).
-            if shared.pause.load(Ordering::Relaxed) {
-                base_pts = None;
-                std::thread::sleep(Duration::from_millis(50));
-                continue;
-            }
-
             let mut flags: u32 = 0;
             let mut timestamp: i64 = 0;
             let mut sample: Option<IMFSample> = None;
