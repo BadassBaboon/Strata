@@ -122,6 +122,8 @@ export struct WallpaperItem {
     is-parallax:   bool,   // shader vs parallax asset (badge)
     is-imported:   bool,   // imported from a Shadertoy export (red badge + delete)
     is-video:      bool,   // movie (.mp4) wallpaper (red film badge + delete)
+    group:         int,    // grouping: 0=shader, 1=movie, 2=parallax
+    group-index:   int,    // 0-based position within its group (for grid column placement)
 }
 
 export struct LayerItem {
@@ -1653,6 +1655,74 @@ component WallpaperCard inherits Rectangle {
     }
 }
 
+// One collapsible library section (Shader / Movie / Parallax) with a header (chevron +
+// title + count) and a card grid filtered to its group. Iterates the FULL wallpaper model
+// so the global index `i` stays valid for delete; places cards by per-group `group-index`.
+component GroupSection inherits VerticalLayout {
+    in property <[WallpaperItem]> wallpapers;
+    in property <[MonitorItem]> monitors;
+    in property <string> title;
+    in property <int> count;
+    in property <int> group;
+    in property <int> cols;
+    in property <[float]> lanes;
+    in property <length> col-width;
+    in-out property <bool> collapsed;
+    callback open-url(string);
+    callback apply-to-monitor(int, string);
+    callback delete-requested(int);
+    callback toggled(bool); // fired on header click so the host can persist collapse state
+    spacing: 0;
+
+    // Header
+    Rectangle {
+        height: 46px; border-radius: 10px;
+        background: hdr-ta.has-hover ? Theme.palette.card-hover : transparent;
+        animate background { duration: 120ms; }
+        HorizontalLayout {
+            padding-left: 6px; padding-right: 6px; spacing: 10px;
+            VerticalLayout { alignment: center;
+                Icon { name: root.collapsed ? "chevron-up" : "chevron-down"; size: 18px; color: Theme.palette.text-muted; }
+            }
+            Text { text: root.title; color: Theme.palette.text; font-size: 14px; font-weight: 800;
+                   letter-spacing: 0.5px; vertical-alignment: center; }
+            Text { text: "(" + root.count + ")"; color: Theme.palette.text-muted; font-size: 13px; font-weight: 600;
+                   vertical-alignment: center; horizontal-stretch: 1; }
+        }
+        hdr-ta := TouchArea { clicked => { root.collapsed = !root.collapsed; root.toggled(root.collapsed); } mouse-cursor: pointer; }
+    }
+    Rectangle { height: 12px; } // gap under the header
+
+    if !root.collapsed : HorizontalLayout {
+        spacing: 32px; alignment: start;
+        for lane in root.lanes : VerticalLayout {
+            width: root.col-width;
+            spacing: 0; alignment: start;
+            for wallpaper[i] in root.wallpapers : VerticalLayout {
+                padding-bottom: (wallpaper.group == root.group && wallpaper.visible && Math.mod(wallpaper.group-index, root.cols) == lane) ? 32px : 0px;
+                if wallpaper.group == root.group && wallpaper.visible && (Math.mod(wallpaper.group-index, root.cols) == lane) : WallpaperCard {
+                    name:          wallpaper.name;
+                    author:        wallpaper.author;
+                    tags:          wallpaper.tags;
+                    has-thumbnail: wallpaper.has-thumbnail;
+                    thumbnail:     wallpaper.thumbnail;
+                    usage-counts:  wallpaper.usage-counts;
+                    monitors:      root.monitors;
+                    is-active:     wallpaper.is-active;
+                    is-parallax:   wallpaper.is-parallax;
+                    is-imported:   wallpaper.is-imported;
+                    is-video:      wallpaper.is-video;
+                    source-url:    wallpaper.source-url;
+                    open-url(u) => { root.open-url(u); }
+                    toggle-monitor(idx) => { root.apply-to-monitor(idx, wallpaper.name); }
+                    delete-requested => { root.delete-requested(i); }
+                }
+            }
+        }
+    }
+    Rectangle { height: 20px; } // gap below the section
+}
+
 // ── Parallax Studio ─────────────────────────────────────────────────────────
 // Ported from the ui-prototype ParallaxStudio. All controls are visual stubs
 // (local state only) - backend depth/parallax wiring comes later.
@@ -2400,6 +2470,15 @@ export component AppWindow inherits Window {
     // Library sort order (see sort_entries in Rust). Menu next to Refresh.
     in-out property <string> sort-mode: "default";
     callback sort-changed(string);
+    // Library grouping into collapsible Shader / Movie / Parallax sections (always on).
+    // Collapse state per group is persisted via group-collapsed-changed (0/1/2).
+    in-out property <bool> shaders-collapsed: false;
+    in-out property <bool> movies-collapsed: false;
+    in-out property <bool> parallax-collapsed: false;
+    callback group-collapsed-changed(int, bool);
+    in property <int> shader-group-count: 0;
+    in property <int> movie-group-count: 0;
+    in property <int> parallax-group-count: 0;
     callback wallpaper-delete-requested(int);
     // Open an external URL (e.g. a shader's original Shadertoy page) in the browser.
     callback open-url(string);
@@ -2744,34 +2823,39 @@ export component AppWindow inherits Window {
                             // scrollbar / clipped cards at small window sizes.
                             width: grid-area.width - 26px;
                             padding: 4px;
-                            if root.wallpapers.length > 0 : HorizontalLayout {
-                                spacing: 32px; alignment: start;
-                                for lane in grid-area.lanes : VerticalLayout {
-                                    width: grid-area.col-width;
-                                    spacing: 0; alignment: start;
-                                    // One wrapper per wallpaper (always present); the
-                                    // 32px gap lives in per-card bottom padding so
-                                    // non-matching iterations contribute zero height.
-                                    for wallpaper[i] in root.wallpapers : VerticalLayout {
-                                        padding-bottom: (wallpaper.visible && Math.mod(i, grid-area.cols) == lane) ? 32px : 0px;
-                                        if wallpaper.visible && (Math.mod(i, grid-area.cols) == lane) : WallpaperCard {
-                                            name:          wallpaper.name;
-                                            author:        wallpaper.author;
-                                            tags:          wallpaper.tags;
-                                            has-thumbnail: wallpaper.has-thumbnail;
-                                            thumbnail:     wallpaper.thumbnail;
-                                            usage-counts:  wallpaper.usage-counts;
-                                            monitors:      root.monitors;
-                                            is-active:     wallpaper.is-active;
-                                            is-parallax:   wallpaper.is-parallax;
-                                            is-imported:   wallpaper.is-imported;
-                                            is-video:      wallpaper.is-video;
-                                            source-url:    wallpaper.source-url;
-                                            open-url(u) => { root.open-url(u); }
-                                            toggle-monitor(idx) => { root.apply-to-monitor(idx, wallpaper.name); }
-                                            delete-requested => { root.wallpaper-delete-requested(i); }
-                                        }
-                                    }
+                            // GROUPED view: collapsible Shader / Movie / Parallax sections
+                            // (always on - it's the better browsing experience).
+                            if root.wallpapers.length > 0 : VerticalLayout {
+                                spacing: 0;
+                                if root.shader-group-count > 0 : GroupSection {
+                                    wallpapers: root.wallpapers; monitors: root.monitors;
+                                    title: "Shader Wallpapers"; count: root.shader-group-count; group: 0;
+                                    cols: grid-area.cols; lanes: grid-area.lanes; col-width: grid-area.col-width;
+                                    collapsed <=> root.shaders-collapsed;
+                                    open-url(u) => { root.open-url(u); }
+                                    apply-to-monitor(idx, n) => { root.apply-to-monitor(idx, n); }
+                                    delete-requested(i) => { root.wallpaper-delete-requested(i); }
+                                    toggled(c) => { root.group-collapsed-changed(0, c); }
+                                }
+                                if root.movie-group-count > 0 : GroupSection {
+                                    wallpapers: root.wallpapers; monitors: root.monitors;
+                                    title: "Movie Wallpapers"; count: root.movie-group-count; group: 1;
+                                    cols: grid-area.cols; lanes: grid-area.lanes; col-width: grid-area.col-width;
+                                    collapsed <=> root.movies-collapsed;
+                                    open-url(u) => { root.open-url(u); }
+                                    apply-to-monitor(idx, n) => { root.apply-to-monitor(idx, n); }
+                                    delete-requested(i) => { root.wallpaper-delete-requested(i); }
+                                    toggled(c) => { root.group-collapsed-changed(1, c); }
+                                }
+                                if root.parallax-group-count > 0 : GroupSection {
+                                    wallpapers: root.wallpapers; monitors: root.monitors;
+                                    title: "Parallax Studio"; count: root.parallax-group-count; group: 2;
+                                    cols: grid-area.cols; lanes: grid-area.lanes; col-width: grid-area.col-width;
+                                    collapsed <=> root.parallax-collapsed;
+                                    open-url(u) => { root.open-url(u); }
+                                    apply-to-monitor(idx, n) => { root.apply-to-monitor(idx, n); }
+                                    delete-requested(i) => { root.wallpaper-delete-requested(i); }
+                                    toggled(c) => { root.group-collapsed-changed(2, c); }
                                 }
                             }
                             if root.wallpapers.length == 0 : VerticalLayout {

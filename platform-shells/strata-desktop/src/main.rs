@@ -1662,6 +1662,9 @@ fn build_library_items(
     wallpapers: &[controller::WallpaperEntry],
     monitors: &[controller::MonitorInfo],
 ) -> Vec<WallpaperItem> {
+    // Running per-group counters so each group's cards get a contiguous index (the grid
+    // places by `group-index mod cols`, so columns fill correctly within each section).
+    let mut group_counter = [0i32; 3];
     wallpapers.iter().map(|w| {
         let mut item = WallpaperItem::default();
         item.name = SharedString::from(&w.name);
@@ -1685,6 +1688,12 @@ fn build_library_items(
             .collect();
         item.is_active = counts.iter().any(|&c| c > 0);
         item.usage_counts = Rc::new(VecModel::from(counts)).into();
+        // Group: 0=shader (incl. imported), 1=movie, 2=parallax. group-index = position
+        // within that group (contiguous, in the current sort order).
+        let g = if item.is_video { 1 } else if item.is_parallax { 2 } else { 0 };
+        item.group = g;
+        item.group_index = group_counter[g as usize];
+        group_counter[g as usize] += 1;
         item
     }).collect()
 }
@@ -1874,6 +1883,19 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     // sort menu so the chosen order survives refresh / import / delete.
     let sort_mode = Rc::new(std::cell::RefCell::new(config.library_sort.clone()));
     ui.set_sort_mode(SharedString::from(config.library_sort.as_str()));
+    // Restore the per-group collapse state, and persist it whenever a header is toggled.
+    ui.set_shaders_collapsed(config.group_collapsed_shader);
+    ui.set_movies_collapsed(config.group_collapsed_movie);
+    ui.set_parallax_collapsed(config.group_collapsed_parallax);
+    ui.on_group_collapsed_changed(move |group, collapsed| {
+        let mut cfg = config::Config::load();
+        match group {
+            1 => cfg.group_collapsed_movie = collapsed,
+            2 => cfg.group_collapsed_parallax = collapsed,
+            _ => cfg.group_collapsed_shader = collapsed,
+        }
+        cfg.save().ok();
+    });
 
     // Set up Wallpaper Library: bundled library + user roots (parallax + imports).
     let wallpapers_model = {
@@ -4093,17 +4115,28 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             // movie-only desktop should read "inactive", not 0 FPS. Count only visible
             // SHADER layers (path NOT under the import-video dir - cheap, no disk read).
             let video_dir = controller::import_video_dir();
-            let (engine_active, any_movie) = app_state_timer.read()
+            let (engine_active, any_movie, group_counts) = app_state_timer.read()
                 .map(|s| {
                     let is_movie = |l: &controller::LayerInfo| video_dir.as_ref().is_some_and(|vd| l.wallpaper_path.starts_with(vd));
                     let active = s.monitors.iter().any(|m| m.layers.iter().any(|l| l.visible && !is_movie(l)));
                     let movie = s.monitors.iter().any(|m| m.layers.iter().any(|l| is_movie(l)));
-                    (active, movie)
+                    // Library group counts (shader / movie / parallax) for the group headers.
+                    let mut c = [0i32; 3];
+                    for w in &s.wallpapers {
+                        let g = if video_dir.as_ref().is_some_and(|vd| w.path.starts_with(vd)) { 1 }
+                                else if w.tags.iter().any(|t| t.eq_ignore_ascii_case("Parallax")) { 2 }
+                                else { 0 };
+                        c[g] += 1;
+                    }
+                    (active, movie, c)
                 })
-                .unwrap_or((false, false));
+                .unwrap_or((false, false, [0, 0, 0]));
             ui.set_engine_active(engine_active);
             // Span is unavailable while a movie wallpaper is active (movies don't span).
             ui.set_span_disabled(any_movie);
+            ui.set_shader_group_count(group_counts[0]);
+            ui.set_movie_group_count(group_counts[1]);
+            ui.set_parallax_group_count(group_counts[2]);
 
             // ── Logs ──
             // Parse each "[LEVEL] message" line into a structured entry with a
