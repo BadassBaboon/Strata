@@ -2649,15 +2649,22 @@ export component AppWindow inherits Window {
                                x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
                         sort-ta := TouchArea { clicked => { sort-pop.show(); } mouse-cursor: pointer; }
                         sort-pop := PopupWindow {
-                            x: -134px; y: 52px; width: 182px; height: sort-col.preferred-height;
+                            x: -134px; y: 52px; width: 190px; height: sort-col.preferred-height;
                             Rectangle {
                                 background: Theme.palette.card; border-radius: 12px;
                                 border-width: 1px; border-color: Theme.palette.border;
                                 drop-shadow-blur: 24px; drop-shadow-color: #00000055;
                                 sort-col := VerticalLayout {
-                                    padding: 6px; spacing: 2px;
-                                    Text { text: "SORT BY"; color: Theme.palette.text-muted; font-size: 9px; font-weight: 800;
-                                           letter-spacing: 1px; horizontal-alignment: left; }
+                                    padding: 8px; spacing: 2px;
+                                    // Header row: label + a separating rule so it reads as a
+                                    // proper menu title instead of text wedged in the corner.
+                                    HorizontalLayout {
+                                        padding-left: 8px; padding-right: 8px; padding-top: 4px; padding-bottom: 6px;
+                                        Text { text: "Sort by"; color: Theme.palette.text; font-size: 12px; font-weight: 700;
+                                               vertical-alignment: center; }
+                                    }
+                                    Rectangle { height: 1px; background: Theme.palette.border; }
+                                    Rectangle { height: 4px; } // breathing room under the rule
                                     SortRow { label: "Default"; selected: root.sort-mode == "default";
                                               clicked => { root.sort-changed("default"); sort-pop.close(); } }
                                     SortRow { label: "Name (A–Z)"; selected: root.sort-mode == "name-asc";

@@ -1595,6 +1595,45 @@ fn entry_mtime(w: &controller::WallpaperEntry) -> Option<std::time::SystemTime> 
     std::fs::metadata(&w.path).and_then(|m| m.modified()).ok()
 }
 
+/// Map each bundled shader slug -> the library version it was added in (`added_in` in the
+/// library index.toml). Lets date sorts order bundled shaders by WHEN they entered the
+/// library (they all share a folder mtime, so the filesystem can't tell them apart).
+fn library_added_versions() -> std::collections::HashMap<String, (u32, u32, u32)> {
+    let mut map = std::collections::HashMap::new();
+    let parse = |s: &str| -> (u32, u32, u32) {
+        let mut it = s.trim().trim_start_matches(['v', 'V']).split(['.', '-', '+'])
+            .filter_map(|p| p.parse::<u32>().ok());
+        (it.next().unwrap_or(0), it.next().unwrap_or(0), it.next().unwrap_or(0))
+    };
+    if let Some(root) = controller::fetched_library_root() {
+        if let Ok(text) = std::fs::read_to_string(root.join("index.toml")) {
+            if let Ok(val) = toml::from_str::<toml::Value>(&text) {
+                if let Some(arr) = val.get("shader").and_then(|s| s.as_array()) {
+                    for s in arr {
+                        if let (Some(slug), Some(ver)) = (
+                            s.get("slug").and_then(|v| v.as_str()),
+                            s.get("added_in").and_then(|v| v.as_str()),
+                        ) { map.insert(slug.to_string(), parse(ver)); }
+                    }
+                }
+            }
+        }
+    }
+    map
+}
+
+/// A wallpaper's "added" sort key: bundled shaders rank by the library version they were
+/// added in (from the index); user content (imports/parallax/movies, not in the index)
+/// ranks as newest, ordered among themselves by folder mtime.
+fn entry_added_key(w: &controller::WallpaperEntry,
+    versions: &std::collections::HashMap<String, (u32, u32, u32)>) -> ((u32, u32, u32), std::time::SystemTime) {
+    let slug = w.path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    match versions.get(slug) {
+        Some(v) => (*v, std::time::SystemTime::UNIX_EPOCH),
+        None => ((u32::MAX, u32::MAX, u32::MAX), entry_mtime(w).unwrap_or(std::time::SystemTime::UNIX_EPOCH)),
+    }
+}
+
 /// Sort the wallpaper list IN PLACE per the chosen mode. Done on `state.wallpapers` itself
 /// (not just the view model) so row indices stay consistent with the grid - the delete
 /// handler resolves by index. Modes: "default" (bundled shaders A-Z, then user content
@@ -1603,8 +1642,14 @@ fn sort_entries(entries: &mut [controller::WallpaperEntry], sort_mode: &str) {
     match sort_mode {
         "name-asc"    => entries.sort_by_cached_key(|w| w.name.to_lowercase()),
         "name-desc"   => entries.sort_by_cached_key(|w| std::cmp::Reverse(w.name.to_lowercase())),
-        "date-newest" => entries.sort_by_cached_key(|w| std::cmp::Reverse(entry_mtime(w))),
-        "date-oldest" => entries.sort_by_cached_key(|w| entry_mtime(w)),
+        "date-newest" => {
+            let v = library_added_versions();
+            entries.sort_by_cached_key(|w| std::cmp::Reverse(entry_added_key(w, &v)));
+        }
+        "date-oldest" => {
+            let v = library_added_versions();
+            entries.sort_by_cached_key(|w| entry_added_key(w, &v));
+        }
         // "default": user content (parallax / imported / movie) sinks to the bottom,
         // each group alphabetical.
         _ => entries.sort_by_cached_key(|w| (controller::is_user_deletable(&w.path), w.name.to_lowercase())),
