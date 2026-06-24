@@ -34,6 +34,12 @@ slint = { version = "1.16.1", default-features = false, features = [
 clap = { version = "4.5", features = ["derive"] }
 image = "0.25"
 rfd = "0.14"
+# Cross-platform system WebView (WebView2 on Windows, WebKitGTK on Linux, WKWebView on
+# macOS). Used ONLY to play .mp4 movie wallpapers via an HTML <video> element - the
+# browser engine's zero-copy hardware video pipeline is what makes 4K cheap. Shaders
+# stay 100% native wgpu; the WebView is created on demand and torn down when no video
+# wallpaper is active.
+wry = "0.45"
 zip = "2.1"
 open = "5"
 display-info = "0.5"
@@ -52,11 +58,19 @@ windows-sys = { version = "0.52", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_HiDpi",
     "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
     "Win32_System_ProcessStatus",
     "Win32_System_Threading",
     "Win32_System_Console",
     "Win32_System_Registry",
     "Win32_UI_Shell",
+] }
+# Higher-level COM bindings, used for the Media Foundation video decoder (movie
+# wallpapers). windows-sys can't ergonomically drive MF's COM interfaces.
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_Media_MediaFoundation",
 ] }
 
 [build-dependencies]

@@ -143,6 +143,68 @@ pub fn run_renderer(
     }
 }
 
+/// True if a fullscreen application (not the desktop/shell) currently covers this
+/// monitor - used to pause the wallpaper (render + video decode) while gaming or
+/// watching fullscreen video, so it costs ~0.
+#[cfg(windows)]
+fn foreground_app_covers(origin: (i32, i32), size: (u32, u32)) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowRect, GetClassNameW};
+    use windows_sys::Win32::Foundation::RECT;
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg == 0 { return false; }
+        let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        if GetWindowRect(fg, &mut r) == 0 { return false; }
+        let (mw, mh) = (size.0 as i32, size.1 as i32);
+        let covers = r.left <= origin.0 && r.top <= origin.1
+            && r.right >= origin.0 + mw && r.bottom >= origin.1 + mh;
+        if !covers { return false; }
+        // The desktop/shell windows "cover" the screen but aren't a fullscreen app.
+        let mut buf = [0u16; 64];
+        let n = GetClassNameW(fg, buf.as_mut_ptr(), buf.len() as i32).max(0) as usize;
+        let cls = String::from_utf16_lossy(&buf[..n]);
+        !matches!(cls.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd")
+    }
+}
+
+#[cfg(not(windows))]
+fn foreground_app_covers(_origin: (i32, i32), _size: (u32, u32)) -> bool { false }
+
+/// Load a monitor's layer stack into the renderer. A VIDEO wallpaper is exclusive: if a
+/// visible layer is a movie, it plays alone (video can't be composited with shader
+/// layers yet). Otherwise the shader layers are added bottom-to-top (the top of the UI
+/// list composites on top, Photoshop-style).
+fn apply_layers(renderer: &mut core_engine::Renderer, layers: &[crate::controller::LayerInfo]) {
+    renderer.clear_video();
+    renderer.clear_layers();
+
+    #[cfg(windows)]
+    for layer in layers {
+        if !layer.visible { continue; }
+        if let Some(video_path) = crate::controller::video_wallpaper_path(&layer.wallpaper_path) {
+            log::info!("Video wallpaper: opening {}", video_path.display());
+            match crate::video_decode::MfVideoDecoder::new(&video_path) {
+                Ok(dec) => {
+                    log::info!("Video wallpaper: decoder ready, playing");
+                    renderer.set_video(Box::new(dec));
+                    return;
+                }
+                Err(e) => log::error!("Video wallpaper open failed [{}]: {}", video_path.display(), e),
+            }
+        }
+    }
+
+    for layer in layers.iter().rev() {
+        if !layer.visible { continue; }
+        if let Err(e) = renderer.add_layer(
+            &layer.wallpaper_path, layer.opacity, layer.resolution_scale,
+            layer.positioning.clone(), layer.transform, layer.blend_mode.clone(),
+        ) {
+            log::error!("Layer reload error [{}]: {}", layer.wallpaper_path.display(), e);
+        }
+    }
+}
+
 fn run_monitor_loop(
     window: Arc<Window>,
     surface: core_engine::wgpu::Surface<'static>,
@@ -185,14 +247,7 @@ fn run_monitor_loop(
     // Outdated/Lost recovery path, which must use this same size.
     let fixed_size = initial_size;
 
-    // Reverse so the TOP of the UI layer list composites on top (Photoshop-style):
-    // the engine draws pipelines[0] first (bottom) and later ones over it.
-    for layer in layers.iter().rev() {
-        if !layer.visible { continue; }
-        if let Err(e) = renderer.add_layer(&layer.wallpaper_path, layer.opacity, layer.resolution_scale, layer.positioning.clone(), layer.transform, layer.blend_mode.clone()) {
-            log::error!("Layer reload error [{}]: {}", layer.wallpaper_path.display(), e);
-        }
-    }
+    apply_layers(&mut renderer, &layers);
 
     // ── Frame pacing ──────────────────────────────────────────────────────
     // Live wallpapers do NOT need to run at the monitor's native refresh rate.
@@ -218,6 +273,11 @@ fn run_monitor_loop(
     // key fix for "CPU stays high even with all shaders disabled".
     let mut painted_empty = false;
 
+    // Pause-when-covered state: when a fullscreen app covers this monitor we stop
+    // rendering and pause the video decoder. Checked at most ~twice a second.
+    let mut covered = false;
+    let mut last_cover_check = std::time::Instant::now() - std::time::Duration::from_millis(600);
+
     while running.load(Ordering::SeqCst) {
         // ── Telemetry (updated in both idle and active states) ─────────────
         let now = std::time::Instant::now();
@@ -234,7 +294,9 @@ fn run_monitor_loop(
         // ── Idle path: no layers assigned ─────────────────────────────────
         // Paint one black frame so the desktop background is cleared, then
         // block on the command channel.  An empty monitor now costs ~0 % CPU.
-        if renderer.pipelines.is_empty() {
+        // A VIDEO wallpaper has no shader pipelines but must keep rendering, so it
+        // is NOT idle.
+        if renderer.pipelines.is_empty() && !renderer.has_video() {
             if !painted_empty {
                 match renderer.render() {
                     Ok(_) => painted_empty = true,
@@ -269,8 +331,26 @@ fn run_monitor_loop(
         }
 
         // A command may have cleared every layer - re-check before drawing so
-        // we drop straight into the idle path next iteration.
-        if renderer.pipelines.is_empty() {
+        // we drop straight into the idle path next iteration. A video wallpaper
+        // keeps rendering even with no shader pipelines.
+        if renderer.pipelines.is_empty() && !renderer.has_video() {
+            continue;
+        }
+
+        // Pause-when-covered: if a fullscreen app (game, maximized video) covers this
+        // monitor, stop rendering AND pause the video decoder so the wallpaper costs ~0.
+        if last_cover_check.elapsed() >= std::time::Duration::from_millis(500) {
+            last_cover_check = std::time::Instant::now();
+            let now_covered = foreground_app_covers(monitor_origin, (renderer.size.width, renderer.size.height));
+            if now_covered != covered {
+                covered = now_covered;
+                renderer.set_video_paused(covered);
+                log::info!("Monitor {:?} wallpaper {}", window_id,
+                    if covered { "paused (fullscreen app on top)" } else { "resumed" });
+            }
+        }
+        if covered {
+            std::thread::sleep(std::time::Duration::from_millis(200));
             continue;
         }
 
@@ -346,21 +426,7 @@ fn process_command(
         }
         EngineCommand::SetLayers(new_layers) => {
             log::info!("Monitor {:?} reloading {} layer(s)", window_id, new_layers.len());
-            renderer.clear_layers();
-            // Reverse: top of the UI list composites on top (see run_monitor_loop).
-            for layer in new_layers.iter().rev() {
-                if !layer.visible { continue; }
-                if let Err(e) = renderer.add_layer(
-                    &layer.wallpaper_path,
-                    layer.opacity,
-                    layer.resolution_scale,
-                    layer.positioning.clone(),
-                    layer.transform,
-                    layer.blend_mode.clone(),
-                ) {
-                    log::error!("Layer reload error [{}]: {}", layer.wallpaper_path.display(), e);
-                }
-            }
+            apply_layers(renderer, &new_layers);
             // Force a repaint of the new state: empty → one black frame,
             // non-empty → active rendering resumes.
             *painted_empty = false;

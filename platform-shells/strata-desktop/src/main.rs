@@ -17,6 +17,8 @@ mod controller;
 mod config;
 mod parallax;
 mod library_sync;
+#[cfg(windows)]
+mod video_decode;
 
 use platform::EngineCommand;
 use controller::{AppState, import_wallpaper_zip, discover_monitors, LayerInfo};
@@ -209,12 +211,122 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         windows_sys::Win32::UI::WindowsAndMessaging::SetProcessDPIAware();
     }
 
+    // Phase-2/3 dev harness: play a single .mp4 in a window to validate the Media
+    // Foundation decoder + texture upload + blit on real hardware before the full
+    // video-wallpaper integration. `strata-desktop --video <path>`.
+    #[cfg(windows)]
+    if let Some(v) = args.video {
+        env_logger::init();
+        return run_video_mode(v);
+    }
+    if let Some(v) = args.video_web {
+        env_logger::init();
+        return run_video_web_mode(v);
+    }
+    if args.video_daemon {
+        env_logger::init();
+        return run_video_daemon();
+    }
+
     if let Some(wallpaper_path) = args.cli {
         env_logger::init();
         run_cli_mode(wallpaper_path)
     } else {
         run_ui_mode(args.minimized)
     }
+}
+
+/// Sanitize a string into a safe folder name (alphanumerics, space, dash, underscore).
+fn sanitize_name(s: &str) -> String {
+    let cleaned: String = s.chars()
+        .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let trimmed = cleaned.trim().trim_matches('_').trim();
+    if trimmed.is_empty() { "video".to_string() } else { trimmed.to_string() }
+}
+
+/// Import a movie (.mp4) as a self-contained video wallpaper pack under
+/// `%APPDATA%/Strata/import-video/<name>/` (`video.mp4` + `manifest.toml` +
+/// `thumbnail.png`). The name defaults to the file's stem. Returns the pack directory.
+fn import_video_wallpaper(src: &std::path::Path, display_name: &str) -> Result<std::path::PathBuf, String> {
+    let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("video");
+    // User-supplied name wins; blank falls back to the file's stem.
+    let raw = if display_name.trim().is_empty() { stem } else { display_name };
+    let name = sanitize_name(raw);
+    let base = controller::import_video_dir().ok_or("could not resolve the user data directory")?;
+    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    let dest = base.join(&name);
+    if dest.exists() {
+        return Err(format!("A wallpaper named \"{name}\" already exists"));
+    }
+    std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+    // Preserve the source container (.mp4 / .webm); the WebView plays both natively.
+    let ext = src.extension().and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase()).unwrap_or_else(|| "mp4".into());
+    let file = format!("video.{ext}");
+    let video_dst = dest.join(&file);
+    std::fs::copy(src, &video_dst).map_err(|e| format!("copy video: {e}"))?;
+    let manifest = format!(
+        "[wallpaper]\nname = \"{}\"\nauthor = \"\"\nversion = \"1.0.0\"\ntags = [\"video\"]\npasses = []\nvideo = \"{}\"\n",
+        name.replace('"', "'"), file,
+    );
+    std::fs::write(dest.join("manifest.toml"), manifest).map_err(|e| e.to_string())?;
+
+    // Thumbnail from the first frame (best-effort: a failure just leaves a blank card).
+    // Media Foundation decodes mp4/H.264 natively, in-process, and instantly - no WebView2.
+    // webm/VP9 isn't MF-decodable, so those cards stay blank (mp4 is the common case).
+    #[cfg(windows)]
+    if ext == "mp4" {
+        if let Err(e) = generate_video_thumbnail(&video_dst, &dest.join("thumbnail.png")) {
+            log::warn!("Video thumbnail generation failed: {e}");
+        }
+    }
+    Ok(dest)
+}
+
+/// Decode the first frame of `video` and save a 480x270 PNG thumbnail (Media Foundation).
+#[cfg(windows)]
+fn generate_video_thumbnail(video: &std::path::Path, out: &std::path::Path) -> Result<(), String> {
+    use core_engine::video::VideoDecoder;
+    let mut dec = crate::video_decode::MfVideoDecoder::new(video)?;
+    let start = std::time::Instant::now();
+    let frame = loop {
+        if let Some(f) = dec.next_frame() { break f; }
+        if start.elapsed() > std::time::Duration::from_secs(4) {
+            return Err("timed out waiting for the first frame".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    drop(dec); // stop decoding
+    let img = nv12_to_rgb_image(&frame);
+    let thumb = image::imageops::thumbnail(&img, 480, 270);
+    thumb.save(out).map_err(|e| format!("save thumbnail: {e}"))?;
+    Ok(())
+}
+
+/// Convert an NV12 frame to an RGB image (BT.709 limited range). One-time, thumbnail-only.
+#[cfg(windows)]
+fn nv12_to_rgb_image(f: &core_engine::video::VideoFrame) -> image::RgbImage {
+    let w = f.width as usize;
+    let h = f.height as usize;
+    let mut img = image::RgbImage::new(f.width, f.height);
+    for y in 0..h {
+        let uv_row = (y / 2) * w;
+        for x in 0..w {
+            let yy = f.y.get(y * w + x).copied().unwrap_or(0) as f32;
+            let ui = uv_row + (x / 2) * 2;
+            let u = f.uv.get(ui).copied().unwrap_or(128) as f32;
+            let v = f.uv.get(ui + 1).copied().unwrap_or(128) as f32;
+            let yf = 1.164383 * (yy - 16.0);
+            let uf = u - 128.0;
+            let vf = v - 128.0;
+            let r = (yf + 1.792741 * vf).clamp(0.0, 255.0) as u8;
+            let g = (yf - 0.213249 * uf - 0.532909 * vf).clamp(0.0, 255.0) as u8;
+            let b = (yf + 2.112402 * uf).clamp(0.0, 255.0) as u8;
+            img.put_pixel(x as u32, y as u32, image::Rgb([r, g, b]));
+        }
+    }
+    img
 }
 
 fn run_cli_mode(wallpaper_dir: String) -> Result<(), Box<dyn std::error::Error>> {
@@ -316,6 +428,296 @@ fn run_cli_mode(wallpaper_dir: String) -> Result<(), Box<dyn std::error::Error>>
     event_loop.run_app(&mut app).map_err(|e| e.into())
 }
 
+/// Dev harness: decode a single .mp4 with the Media Foundation decoder and blit each
+/// frame to a window. Lets us validate decode + upload + orientation + 4K performance
+/// on real hardware before integrating video into the full wallpaper system.
+#[cfg(windows)]
+fn run_video_mode(video_path: String) -> Result<(), Box<dyn std::error::Error>> {
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::{ControlFlow, EventLoop};
+    use winit::window::Window;
+    use core_engine::wgpu;
+    use core_engine::video::VideoDecoder;
+
+    // NV12 -> RGB on the GPU: sample the luma (Y) and half-res interleaved chroma (UV)
+    // planes, then BT.709 limited-range conversion. Keeps colour conversion off the CPU.
+    const BLIT_WGSL: &str = r#"
+@group(0) @binding(0) var ytex: texture_2d<f32>;
+@group(0) @binding(1) var uvtex: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> VsOut {
+    var p = array<vec2<f32>, 3>(vec2<f32>(-1.0,-1.0), vec2<f32>(3.0,-1.0), vec2<f32>(-1.0,3.0));
+    let xy = p[i];
+    var o: VsOut;
+    o.pos = vec4<f32>(xy, 0.0, 1.0);
+    o.uv = vec2<f32>((xy.x + 1.0) * 0.5, 1.0 - (xy.y + 1.0) * 0.5);
+    return o;
+}
+@fragment
+fn fs(in: VsOut) -> @location(0) vec4<f32> {
+    let yv = textureSample(ytex, samp, in.uv).r;
+    let c = textureSample(uvtex, samp, in.uv).rg;
+    let y = 1.164383 * (yv - 0.0627451);
+    let u = c.x - 0.501961;
+    let v = c.y - 0.501961;
+    let r = y + 1.792741 * v;
+    let g = y - 0.213249 * u - 0.532909 * v;
+    let b = y + 2.112402 * u;
+    return vec4<f32>(r, g, b, 1.0);
+}
+"#;
+
+    struct App {
+        path: String,
+        window: Option<Arc<Window>>,
+        context: Option<Arc<core_engine::GraphicsContext>>,
+        surface: Option<wgpu::Surface<'static>>,
+        config: Option<wgpu::SurfaceConfiguration>,
+        decoder: Option<Box<dyn core_engine::video::VideoDecoder>>,
+        y_tex: Option<wgpu::Texture>,
+        uv_tex: Option<wgpu::Texture>,
+        bind_group: Option<wgpu::BindGroup>,
+        pipeline: Option<wgpu::RenderPipeline>,
+        rt: tokio::runtime::Runtime,
+    }
+
+    impl ApplicationHandler for App {
+        fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+            let decoder = match crate::video_decode::MfVideoDecoder::new(std::path::Path::new(&self.path)) {
+                Ok(d) => d,
+                Err(e) => { log::error!("Video open failed: {e}"); event_loop.exit(); return; }
+            };
+            let (vw, vh) = decoder.dimensions();
+            log::info!("Video opened: {}x{}", vw, vh);
+
+            let attributes = Window::default_attributes()
+                .with_title("Strata Video Test")
+                .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0));
+            let window = Arc::new(event_loop.create_window(attributes).unwrap());
+            let context = Arc::new(self.rt.block_on(core_engine::GraphicsContext::new()).unwrap());
+            let surface = context.instance.create_surface(window.clone()).unwrap();
+            let caps = surface.get_capabilities(&context.adapter);
+            let format = caps.formats.iter().copied().find(|f| !f.is_srgb()).unwrap_or(caps.formats[0]);
+            let size = window.inner_size();
+            let config = wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format,
+                width: size.width.max(1),
+                height: size.height.max(1),
+                present_mode: wgpu::PresentMode::Fifo,
+                alpha_mode: caps.alpha_modes[0],
+                view_formats: vec![],
+                desired_maximum_frame_latency: 2,
+            };
+            surface.configure(&context.device, &config);
+
+            let mk_tex = |label, w, h, fmt| context.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+                format: fmt,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            // Y = full-res R8 (luma); UV = half-res Rg8 (interleaved chroma).
+            let y_tex = mk_tex("video Y", vw, vh, wgpu::TextureFormat::R8Unorm);
+            let uv_tex = mk_tex("video UV", vw / 2, vh / 2, wgpu::TextureFormat::Rg8Unorm);
+            let y_view = y_tex.create_view(&wgpu::TextureViewDescriptor::default());
+            let uv_view = uv_tex.create_view(&wgpu::TextureViewDescriptor::default());
+            let sampler = context.device.create_sampler(&wgpu::SamplerDescriptor {
+                mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            });
+            let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("video blit"), source: wgpu::ShaderSource::Wgsl(BLIT_WGSL.into()),
+            });
+            let tex_entry = |binding| wgpu::BindGroupLayoutEntry {
+                binding, visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                count: None,
+            };
+            let bgl = context.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: None,
+                entries: &[
+                    tex_entry(0),
+                    tex_entry(1),
+                    wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                ],
+            });
+            let bind_group = context.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None, layout: &bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&y_view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&uv_view) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
+                ],
+            });
+            let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None, bind_group_layouts: &[Some(&bgl)], immediate_size: 0,
+            });
+            let pipeline = context.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: None, layout: Some(&layout),
+                vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
+                fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs"),
+                    targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                    compilation_options: Default::default() }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None, multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None, cache: None,
+            });
+
+            self.window = Some(window);
+            self.context = Some(context);
+            self.surface = Some(surface);
+            self.config = Some(config);
+            self.decoder = Some(Box::new(decoder));
+            self.y_tex = Some(y_tex);
+            self.uv_tex = Some(uv_tex);
+            self.bind_group = Some(bind_group);
+            self.pipeline = Some(pipeline);
+        }
+
+        fn window_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, _id: winit::window::WindowId, event: WindowEvent) {
+            match event {
+                WindowEvent::CloseRequested => event_loop.exit(),
+                WindowEvent::Resized(sz) => {
+                    if let (Some(ctx), Some(surface), Some(config)) = (&self.context, &self.surface, &mut self.config) {
+                        config.width = sz.width.max(1);
+                        config.height = sz.height.max(1);
+                        surface.configure(&ctx.device, config);
+                    }
+                }
+                WindowEvent::RedrawRequested => {
+                    let (Some(ctx), Some(surface), Some(decoder), Some(y_tex), Some(uv_tex), Some(bg), Some(pipe), Some(window)) =
+                        (&self.context, &self.surface, &mut self.decoder, &self.y_tex, &self.uv_tex, &self.bind_group, &self.pipeline, &self.window)
+                    else { return };
+
+                    if let Some(frame) = decoder.next_frame() {
+                        // Y plane -> R8 texture (full res); UV plane -> Rg8 texture (half res).
+                        ctx.queue.write_texture(
+                            wgpu::TexelCopyTextureInfo { texture: y_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                            &frame.y,
+                            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(frame.width), rows_per_image: Some(frame.height) },
+                            wgpu::Extent3d { width: frame.width, height: frame.height, depth_or_array_layers: 1 },
+                        );
+                        ctx.queue.write_texture(
+                            wgpu::TexelCopyTextureInfo { texture: uv_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                            &frame.uv,
+                            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(frame.width), rows_per_image: Some(frame.height / 2) },
+                            wgpu::Extent3d { width: frame.width / 2, height: frame.height / 2, depth_or_array_layers: 1 },
+                        );
+                    }
+
+                    let surface_tex = match surface.get_current_texture() {
+                        wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+                        _ => { window.request_redraw(); return; }
+                    };
+                    let view = surface_tex.texture.create_view(&wgpu::TextureViewDescriptor::default());
+                    let mut enc = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                    {
+                        let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: None,
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &view, depth_slice: None, resolve_target: None,
+                                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                            })],
+                            depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                        });
+                        rp.set_pipeline(pipe);
+                        rp.set_bind_group(0, bg, &[]);
+                        rp.draw(0..3, 0..1);
+                    }
+                    ctx.queue.submit([enc.finish()]);
+                    surface_tex.present();
+                    window.request_redraw();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    let event_loop = EventLoop::new()?;
+    event_loop.set_control_flow(ControlFlow::Poll);
+    let mut app = App {
+        path: video_path, window: None, context: None, surface: None, config: None,
+        decoder: None, y_tex: None, uv_tex: None, bind_group: None, pipeline: None, rt,
+    };
+    event_loop.run_app(&mut app).map_err(|e| e.into())
+}
+
+/// Turn an absolute filesystem path into a `file:///C:/...` URL (forward slashes).
+fn file_url(p: &std::path::Path) -> String {
+    let s = p.to_string_lossy().replace('\\', "/");
+    format!("file:///{}", s.trim_start_matches('/'))
+}
+
+/// Dev harness: play a single .mp4 via a system WebView `<video>` element. Validates that
+/// the WebView path reaches the low CPU/RAM the browser's media pipeline gives (the
+/// approach Seelen uses), before we make it the real video-wallpaper renderer.
+fn run_video_web_mode(video_path: String) -> Result<(), Box<dyn std::error::Error>> {
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::{ControlFlow, EventLoop};
+    use winit::window::Window;
+    use wry::WebViewBuilder;
+
+    let abs = if std::path::Path::new(&video_path).is_absolute() {
+        std::path::PathBuf::from(&video_path)
+    } else {
+        std::env::current_dir()?.join(&video_path)
+    };
+    let video_url = file_url(&abs);
+    // The page itself is loaded from file:// so the file:// <video> source is same-origin,
+    // and muted autoplay is allowed without a user gesture.
+    let html = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><style>\
+         html,body{{margin:0;height:100%;background:#000;overflow:hidden}}\
+         video{{position:fixed;inset:0;width:100%;height:100%;object-fit:cover}}\
+         </style></head><body>\
+         <video src=\"{video_url}\" autoplay loop muted playsinline preload=\"auto\"></video>\
+         </body></html>"
+    );
+    let html_path = std::env::temp_dir().join("strata-video-web-test.html");
+    std::fs::write(&html_path, html)?;
+    let page_url = file_url(&html_path);
+    log::info!("WebView video test page: {page_url}");
+
+    struct App {
+        page_url: String,
+        window: Option<Arc<Window>>,
+        _webview: Option<wry::WebView>,
+    }
+    impl ApplicationHandler for App {
+        fn resumed(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+            let window = Arc::new(el.create_window(
+                Window::default_attributes()
+                    .with_title("Strata Video (WebView) Test")
+                    .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0)),
+            ).unwrap());
+            let webview = WebViewBuilder::new(&*window)
+                .with_url(&self.page_url)
+                .build()
+                .expect("build webview");
+            self.window = Some(window);
+            self._webview = Some(webview);
+        }
+        fn window_event(&mut self, el: &winit::event_loop::ActiveEventLoop, _id: winit::window::WindowId, event: WindowEvent) {
+            if let WindowEvent::CloseRequested = event { el.exit(); }
+        }
+    }
+
+    let event_loop = EventLoop::new()?;
+    event_loop.set_control_flow(ControlFlow::Wait);
+    let mut app = App { page_url, window: None, _webview: None };
+    event_loop.run_app(&mut app)?;
+    Ok(())
+}
+
 // Tracks every live wallpaper window so they can be closed and recreated when
 // the monitor configuration changes.  The third tuple element is the monitor
 // id, so we can map a monitor → its window for per-monitor teardown.  Rc is
@@ -332,11 +734,424 @@ type WallpaperWindowStore =
 type PendingCloseStore =
     std::rc::Rc<std::cell::RefCell<Vec<(WallpaperWindow, std::time::Instant)>>>;
 
-/// Create one wallpaper window per monitor and reparent each to the desktop
-/// WorkerW.  Stores the resulting Slint components in `store` so they can be
-/// closed later.  Safe to call multiple times (e.g. after a monitor change);
-/// old windows must be drained from `store` and their `WindowClosed` commands
-/// sent before calling again.
+/// One video wallpaper the daemon is currently showing, tracked in the MAIN process so it
+/// can reconcile changes and decide when to kill the daemon.
+#[derive(Clone, PartialEq)]
+struct VideoEntry { path: std::path::PathBuf, fit: String, geom: (i32, i32, u32, u32) }
+
+/// Handle to the running video-daemon child process (main process side).
+struct DaemonHandle { child: std::process::Child, stdin: std::process::ChildStdin }
+
+/// Commands the main process streams to the daemon over stdin (one JSON object per line).
+#[derive(serde::Serialize, serde::Deserialize)]
+enum DaemonCmd {
+    SetVideo { monitor_id: String, x: i32, y: i32, w: u32, h: u32, path: String, fit: String },
+    RemoveVideo { monitor_id: String },
+    SetFit { monitor_id: String, fit: String },
+    SetPaused { monitor_id: String, paused: bool },
+    Shutdown,
+}
+
+thread_local! {
+    /// MAIN PROCESS: the running video-daemon child (None until the first video wallpaper).
+    static VIDEO_DAEMON: std::cell::RefCell<Option<DaemonHandle>> =
+        const { std::cell::RefCell::new(None) };
+    /// MAIN PROCESS: what we've told the daemon to show, per monitor (for reconciliation).
+    static VIDEO_STATE: std::cell::RefCell<std::collections::HashMap<String, VideoEntry>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// MAIN PROCESS: last pause state sent per monitor (so we only send on change).
+    static VIDEO_PAUSED: std::cell::RefCell<std::collections::HashMap<String, bool>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// DAEMON PROCESS: shared WebView2 data context (folder under %LOCALAPPDATA%\Strata, not
+    /// next to the exe). Only ever touched inside the daemon child.
+    static WEB_CONTEXT: std::cell::RefCell<Option<wry::WebContext>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Monitor ids that currently have a video wallpaper (as told to the daemon).
+fn video_daemon_monitors() -> Vec<String> {
+    VIDEO_STATE.with(|s| s.borrow().keys().cloned().collect())
+}
+
+/// Map a layer's positioning preset to the CSS `object-fit` for a video wallpaper.
+/// Fill = cover the screen (crop, keep aspect); Fit = whole frame letterboxed; Stretch =
+/// distort to fill; Center/Custom = native size, centred. Shaders ignore this (they map
+/// via their own positioning); it only drives the `<video>` element.
+fn positioning_to_object_fit(positioning: &str) -> &'static str {
+    match positioning {
+        "Fit" => "contain",
+        "Stretch" => "fill",
+        "Center" | "Custom" => "none",
+        _ => "cover", // "Fill" and any unknown default
+    }
+}
+
+/// Spawn the video-daemon child if it isn't already running. WebView2 lives ONLY in this
+/// child, so killing it fully reclaims that memory from the main app.
+fn daemon_ensure_spawned() {
+    VIDEO_DAEMON.with(|d| {
+        let mut h = d.borrow_mut();
+        if h.is_some() { return; }
+        let exe = match std::env::current_exe() {
+            Ok(p) => p,
+            Err(e) => { log::error!("video daemon: current_exe: {e}"); return; }
+        };
+        match std::process::Command::new(exe).arg("--video-daemon")
+            .stdin(std::process::Stdio::piped()).spawn()
+        {
+            Ok(mut child) => {
+                let stdin = child.stdin.take().expect("piped stdin");
+                *h = Some(DaemonHandle { child, stdin });
+                log::info!("video daemon spawned");
+            }
+            Err(e) => log::error!("video daemon spawn failed: {e}"),
+        }
+    });
+}
+
+/// Send one command to the daemon (no-op if it isn't running).
+fn daemon_send(cmd: &DaemonCmd) {
+    VIDEO_DAEMON.with(|d| {
+        if let Some(h) = d.borrow_mut().as_mut() {
+            use std::io::Write;
+            if let Ok(line) = serde_json::to_string(cmd) {
+                if writeln!(h.stdin, "{line}").and_then(|_| h.stdin.flush()).is_err() {
+                    log::warn!("video daemon: write failed (process gone?)");
+                }
+            }
+        }
+    });
+}
+
+/// Kill the daemon entirely (instant, full WebView2 RAM reclaim) and forget our state.
+fn daemon_shutdown() {
+    VIDEO_DAEMON.with(|d| {
+        if let Some(mut h) = d.borrow_mut().take() {
+            let _ = h.child.kill();
+            let _ = h.child.wait();
+            log::info!("video daemon stopped");
+        }
+    });
+    VIDEO_STATE.with(|s| s.borrow_mut().clear());
+}
+
+/// Live-update the fit of a running video wallpaper without recreating it.
+fn daemon_set_fit(monitor_id: &str, object_fit: &str) {
+    daemon_send(&DaemonCmd::SetFit { monitor_id: monitor_id.to_string(), fit: object_fit.to_string() });
+    VIDEO_STATE.with(|s| { if let Some(e) = s.borrow_mut().get_mut(monitor_id) { e.fit = object_fit.to_string(); } });
+}
+
+/// Pause/resume a running video wallpaper (used by the cover-detection check).
+fn daemon_set_paused(monitor_id: &str, paused: bool) {
+    daemon_send(&DaemonCmd::SetPaused { monitor_id: monitor_id.to_string(), paused });
+}
+
+/// True if a true-fullscreen app covers this monitor. Walks top-level windows in Z-order
+/// (top first) and inspects the TOPMOST real (visible, non-cloaked, non-shell) window that
+/// overlaps the monitor: covered iff it spans the whole monitor (incl. the taskbar area -
+/// a merely maximised window leaves the taskbar and doesn't qualify). Per-monitor and
+/// focus-independent, so it works on both displays at once and doesn't flap as focus moves.
+#[cfg(windows)]
+fn monitor_covered(origin: (i32, i32), size: (u32, u32)) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, IsWindowVisible, IsIconic, GetWindowRect, GetClassNameW,
+    };
+    use windows_sys::Win32::Foundation::{RECT, HWND, LPARAM, BOOL};
+    use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+
+    struct Ctx { ox: i32, oy: i32, mw: i32, mh: i32, covered: bool, done: bool }
+
+    unsafe extern "system" fn cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let ctx = &mut *(lparam as *mut Ctx);
+        if ctx.done { return 0; }
+        if IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0 { return 1; }
+        // Cloaked windows (background UWP apps) report huge rects but aren't on screen.
+        let mut cloaked: u32 = 0;
+        DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED as u32,
+            (&mut cloaked as *mut u32).cast(), std::mem::size_of::<u32>() as u32);
+        if cloaked != 0 { return 1; }
+        let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        if GetWindowRect(hwnd, &mut r) == 0 { return 1; }
+        // Only windows overlapping this monitor matter.
+        let intersects = r.left < ctx.ox + ctx.mw && r.right > ctx.ox
+            && r.top < ctx.oy + ctx.mh && r.bottom > ctx.oy;
+        if !intersects { return 1; }
+        let mut buf = [0u16; 64];
+        let n = GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32).max(0) as usize;
+        let cls = String::from_utf16_lossy(&buf[..n]);
+        // Shell + our own wallpaper windows don't count as covering.
+        if matches!(cls.as_str(),
+            "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+            | "Windows.UI.Core.CoreWindow" | "XamlExplorerHostIslandWindow"
+        ) { return 1; }
+        // Topmost real window over this monitor: covered iff it fully spans it.
+        ctx.covered = r.left <= ctx.ox && r.top <= ctx.oy
+            && r.right >= ctx.ox + ctx.mw && r.bottom >= ctx.oy + ctx.mh;
+        ctx.done = true;
+        0
+    }
+
+    let mut ctx = Ctx { ox: origin.0, oy: origin.1, mw: size.0 as i32, mh: size.1 as i32, covered: false, done: false };
+    unsafe { EnumWindows(Some(cb), &mut ctx as *mut _ as LPARAM); }
+    ctx.covered
+}
+#[cfg(not(windows))]
+fn monitor_covered(_origin: (i32, i32), _size: (u32, u32)) -> bool { false }
+
+/// Pause each video wallpaper whose monitor is covered by a fullscreen app, resume it when
+/// uncovered. Only sends on a state change. Called on a slow throttle from the UI timer so
+/// gaming / fullscreen video drops the movie's decode to ~0.
+fn update_video_pause(app_state: &controller::SharedState) {
+    let monitors = video_daemon_monitors();
+    if monitors.is_empty() {
+        VIDEO_PAUSED.with(|p| p.borrow_mut().clear());
+        return;
+    }
+    let geoms: Vec<(String, (i32, i32), (u32, u32))> = {
+        let state = app_state.read().unwrap();
+        monitors.iter().filter_map(|id|
+            state.monitors.iter().find(|m| &m.id == id).map(|m| (id.clone(), m.position, m.resolution))
+        ).collect()
+    };
+    VIDEO_PAUSED.with(|p| {
+        let mut map = p.borrow_mut();
+        map.retain(|k, _| monitors.contains(k));
+        for (id, origin, size) in geoms {
+            let covered = monitor_covered(origin, size);
+            if map.get(&id) != Some(&covered) {
+                daemon_set_paused(&id, covered);
+                map.insert(id, covered);
+            }
+        }
+    });
+}
+
+/// Reconcile the daemon with the desired per-monitor video state: spawn it on demand, send
+/// Set/Remove as assignments change, and kill it when no video remains. Video is always
+/// per-monitor (never spanned). Call after any wallpaper/monitor change.
+fn reconcile_video_daemon(app_state: &controller::SharedState) {
+    let desired: std::collections::HashMap<String, VideoEntry> = {
+        let state = app_state.read().unwrap();
+        state.monitors.iter().filter_map(|m| {
+            let (path, fit) = m.layers.iter().find_map(|l|
+                controller::video_wallpaper_path(&l.wallpaper_path)
+                    .map(|p| (p, positioning_to_object_fit(&l.positioning).to_string())))?;
+            Some((m.id.clone(), VideoEntry {
+                path, fit, geom: (m.position.0, m.position.1, m.resolution.0, m.resolution.1),
+            }))
+        }).collect()
+    };
+
+    let empty = VIDEO_STATE.with(|s| {
+        let mut cur = s.borrow_mut();
+
+        // Drop monitors that no longer want a video.
+        let stale: Vec<String> = cur.keys().filter(|k| !desired.contains_key(*k)).cloned().collect();
+        for id in stale {
+            daemon_send(&DaemonCmd::RemoveVideo { monitor_id: id.clone() });
+            cur.remove(&id);
+        }
+
+        // Create/replace monitors whose video path or geometry changed (fit-only changes
+        // go through daemon_set_fit, which keeps `cur` in sync so they don't re-trigger).
+        for (id, want) in &desired {
+            let needs_set = match cur.get(id) {
+                Some(have) => have.path != want.path || have.geom != want.geom,
+                None => true,
+            };
+            if needs_set {
+                daemon_ensure_spawned();
+                daemon_send(&DaemonCmd::SetVideo {
+                    monitor_id: id.clone(),
+                    x: want.geom.0, y: want.geom.1, w: want.geom.2, h: want.geom.3,
+                    path: want.path.to_string_lossy().into_owned(),
+                    fit: want.fit.clone(),
+                });
+                cur.insert(id.clone(), want.clone());
+            }
+        }
+        cur.is_empty()
+    });
+
+    // No videos left anywhere -> tear the whole daemon down (reclaims all its memory).
+    if empty { daemon_shutdown(); }
+}
+
+/// Attach a system WebView playing `video_path` as the wallpaper, filling `window`. The
+/// browser's hardware media pipeline does the heavy lifting (zero-copy), so the host
+/// process stays tiny. `window` must already be reparented into WorkerW. `object_fit` is
+/// the CSS fit (see `positioning_to_object_fit`).
+fn attach_video_webview(window: &winit::window::Window, video_path: &std::path::Path, monitor_id: &str, object_fit: &str) -> Result<wry::WebView, String> {
+    let abs = if video_path.is_absolute() {
+        video_path.to_path_buf()
+    } else {
+        std::env::current_dir().map_err(|e| e.to_string())?.join(video_path)
+    };
+    let video_url = file_url(&abs);
+    let html = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><style>\
+         html,body{{margin:0;height:100%;background:#000;overflow:hidden}}\
+         video{{position:fixed;inset:0;width:100%;height:100%;object-fit:{object_fit}}}\
+         </style></head><body>\
+         <video src=\"{video_url}\" autoplay loop muted playsinline preload=\"auto\"></video>\
+         </body></html>"
+    );
+    // Load the page from file:// so the file:// <video> source is same-origin and muted
+    // autoplay is allowed without a user gesture.
+    let html_path = std::env::temp_dir().join(format!("strata-wallpaper-{}.html", sanitize_name(monitor_id)));
+    std::fs::write(&html_path, html).map_err(|e| e.to_string())?;
+    let page_url = file_url(&html_path);
+
+    // One shared WebContext for all video wallpapers, with its data folder under
+    // %LOCALAPPDATA%\Strata. Without this, WebView2 drops a writable
+    // "<exe>.exe.WebView2" cache next to the executable - which fails (or needs admin)
+    // when Strata is installed under Program Files. Keeping one context also avoids the
+    // "data folder in use with different options" error from multiple environments.
+    WEB_CONTEXT.with(|c| -> Result<wry::WebView, String> {
+        let mut guard = c.borrow_mut();
+        if guard.is_none() {
+            let base = std::env::var("LOCALAPPDATA")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::env::temp_dir());
+            let dir = base.join("Strata").join("WebView2");
+            std::fs::create_dir_all(&dir).ok();
+            *guard = Some(wry::WebContext::new(Some(dir)));
+        }
+        let ctx = guard.as_mut().unwrap();
+
+        let mut builder = wry::WebViewBuilder::new(window)
+            .with_url(&page_url)
+            .with_transparent(false) // opaque: skip per-frame alpha compositing
+            .with_web_context(ctx);
+        // WebView2 (Windows): trim features we never use and guarantee autoplay.
+        // Marginal CPU/RAM win, but free. Other platforms keep the defaults.
+        #[cfg(target_os = "windows")]
+        {
+            use wry::WebViewBuilderExtWindows;
+            builder = builder.with_additional_browser_args(
+                "--autoplay-policy=no-user-gesture-required \
+                 --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
+                 --disable-background-timer-throttling",
+            );
+        }
+        builder.build().map_err(|e| e.to_string())
+    })
+}
+
+/// Create one WorkerW-parented video window for the daemon and attach its WebView. Mirrors
+/// the shader path's Win32 sequence (prepare -> show -> suppress-activation -> SetParent).
+#[cfg(target_os = "windows")]
+fn create_daemon_video_window(
+    el: &winit::event_loop::ActiveEventLoop,
+    x: i32, y: i32, w: u32, h: u32, path: &str, fit: &str, monitor_id: &str,
+) -> Result<(std::sync::Arc<winit::window::Window>, wry::WebView), String> {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let window = std::sync::Arc::new(el.create_window(
+        winit::window::Window::default_attributes()
+            .with_visible(false)
+            .with_decorations(false)
+            .with_inner_size(winit::dpi::PhysicalSize::new(w, h))
+            .with_position(winit::dpi::PhysicalPosition::new(x, y)),
+    ).map_err(|e| e.to_string())?);
+
+    if let Ok(handle) = window.window_handle() {
+        if let RawWindowHandle::Win32(hh) = handle.as_raw() {
+            let hwnd = hh.hwnd.get() as isize;
+            platform::windows::prepare_wallpaper_window(hwnd as _, x, y, w, h);
+            window.set_visible(true);
+            platform::windows::suppress_activation(hwnd as _);
+            match platform::windows::get_wallpaper_window() {
+                Some(parent) => platform::windows::setup_wallpaper_window(hwnd as _, parent, x, y, w, h),
+                None => log::warn!("daemon: WorkerW not found - video at ({x},{y}) above icons"),
+            }
+        }
+    }
+    let webview = attach_video_webview(window.as_ref(), std::path::Path::new(path), monitor_id, fit)?;
+    Ok((window, webview))
+}
+
+/// The video-daemon child process (`--video-daemon`). Owns all video-wallpaper windows +
+/// WebViews so WebView2 never loads into the main app. Reads `DaemonCmd`s from stdin; exits
+/// when told to (or when stdin closes, i.e. the parent died).
+fn run_video_daemon() -> Result<(), Box<dyn std::error::Error>> {
+    use winit::application::ApplicationHandler;
+    use winit::event_loop::EventLoop;
+
+    let event_loop = EventLoop::<DaemonCmd>::with_user_event().build()?;
+    let proxy = event_loop.create_proxy();
+
+    // Stream commands from stdin on a worker thread.
+    std::thread::Builder::new().name("strata-video-daemon-stdin".into()).spawn(move || {
+        use std::io::BufRead;
+        let stdin = std::io::stdin();
+        for line in stdin.lock().lines() {
+            match line {
+                Ok(l) if l.trim().is_empty() => continue,
+                Ok(l) => match serde_json::from_str::<DaemonCmd>(&l) {
+                    Ok(cmd) => { if proxy.send_event(cmd).is_err() { return; } }
+                    Err(e) => eprintln!("video daemon: bad command: {e}"),
+                },
+                Err(_) => break,
+            }
+        }
+        // stdin closed (parent exited) -> ask the loop to shut down.
+        let _ = proxy.send_event(DaemonCmd::Shutdown);
+    }).ok();
+
+    struct Daemon {
+        windows: std::collections::HashMap<String, (std::sync::Arc<winit::window::Window>, wry::WebView)>,
+    }
+    impl ApplicationHandler<DaemonCmd> for Daemon {
+        fn resumed(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+            // Idle between commands - the daemon only reacts to stdin events, so don't
+            // busy-poll a CPU core.
+            el.set_control_flow(winit::event_loop::ControlFlow::Wait);
+        }
+        fn user_event(&mut self, el: &winit::event_loop::ActiveEventLoop, cmd: DaemonCmd) {
+            match cmd {
+                DaemonCmd::SetVideo { monitor_id, x, y, w, h, path, fit } => {
+                    self.windows.remove(&monitor_id); // replace any existing
+                    #[cfg(target_os = "windows")]
+                    match create_daemon_video_window(el, x, y, w, h, &path, &fit, &monitor_id) {
+                        Ok(pair) => { self.windows.insert(monitor_id, pair); }
+                        Err(e) => eprintln!("video daemon SetVideo failed: {e}"),
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    { let _ = (el, x, y, w, h, path, fit, monitor_id); }
+                }
+                DaemonCmd::RemoveVideo { monitor_id } => { self.windows.remove(&monitor_id); }
+                DaemonCmd::SetFit { monitor_id, fit } => {
+                    if let Some((_, wv)) = self.windows.get(&monitor_id) {
+                        let _ = wv.evaluate_script(&format!(
+                            "{{var e=document.querySelector('video');if(e)e.style.objectFit='{fit}';}}"));
+                    }
+                }
+                DaemonCmd::SetPaused { monitor_id, paused } => {
+                    if let Some((_, wv)) = self.windows.get(&monitor_id) {
+                        let js = if paused {
+                            "{var e=document.querySelector('video');if(e)e.pause();}"
+                        } else {
+                            "{var e=document.querySelector('video');if(e)e.play();}"
+                        };
+                        let _ = wv.evaluate_script(js);
+                    }
+                }
+                DaemonCmd::Shutdown => el.exit(),
+            }
+        }
+        fn window_event(&mut self, _el: &winit::event_loop::ActiveEventLoop,
+            _id: winit::window::WindowId, _event: winit::event::WindowEvent) {}
+    }
+
+    let mut daemon = Daemon { windows: std::collections::HashMap::new() };
+    event_loop.run_app(&mut daemon)?;
+    Ok(())
+}
+
+/// Create one wallpaper window per monitor and reparent each to the desktop WorkerW.
+/// Shader monitors get a wgpu surface + render thread (stored in `store`); video monitors
+/// are handed off to the daemon by `reconcile_video_daemon`. Safe to call repeatedly
+/// (idempotent per monitor).
 fn spawn_wallpaper_windows(
     app_state: controller::SharedState,
     command_tx: std::sync::mpsc::Sender<EngineCommand>,
@@ -351,12 +1166,21 @@ fn spawn_wallpaper_windows(
         };
 
         // In span mode every monitor renders the PRIMARY display's shader as a
-        // slice of one unified canvas.
+        // slice of one unified canvas. Video wallpapers never span (a single clip can't
+        // be sliced across WebViews), so they're filtered out here and handled strictly
+        // per-monitor below.
         let span_layers: Vec<LayerInfo> = controller::primary_monitor(&monitors)
-            .map(|m| m.layers.clone())
+            .map(|m| m.layers.iter()
+                .filter(|l| controller::video_wallpaper_path(&l.wallpaper_path).is_none())
+                .cloned().collect())
             .unwrap_or_default();
 
-        // Idempotent: skip monitors that already have a window in the store, so
+        // Hand video monitors off to the daemon process (spawns/kills it as needed). This
+        // covers startup + every monitor/wallpaper change, since sync + refresh both call
+        // here. Video monitors are then skipped in the shader loop below.
+        reconcile_video_daemon(&app_state);
+
+        // Idempotent: skip monitors that already have a shader window in the store, so
         // this can be called incrementally when a monitor gains its first shader.
         let existing: Vec<String> =
             store.borrow().iter().map(|(_, _, id)| id.clone()).collect();
@@ -396,23 +1220,34 @@ fn spawn_wallpaper_windows(
                 m.id.clone(),
             );
 
-            // Effective layers: span mode shows the primary display's shader on
-            // every monitor (each as its own slice of the canvas); otherwise each
-            // monitor shows its own assigned layers.
-            let layers = if span_monitors {
+            // Video monitors are owned by the daemon (reconcile_video_daemon above), not
+            // the wgpu store - skip them here entirely so we never build a shader window
+            // for a monitor that's playing a movie.
+            let has_own_video = m.layers.iter()
+                .any(|l| controller::video_wallpaper_path(&l.wallpaper_path).is_some());
+            if has_own_video {
+                continue;
+            }
+
+            // Effective shader layers: span mode shows the primary display's shader on
+            // every monitor (each its own slice of the canvas); otherwise each monitor
+            // shows its own assigned shader layers (video excluded).
+            let layers: Vec<LayerInfo> = if span_monitors {
                 span_layers.clone()
             } else {
-                m.layers.clone()
+                m.layers.iter()
+                    .filter(|l| controller::video_wallpaper_path(&l.wallpaper_path).is_none())
+                    .cloned().collect()
             };
 
-            // Release-desktop rule: a monitor with no shader gets NO window at
-            // all, so the user's real Windows wallpaper shows through and no
-            // swapchain VRAM / render thread is spent on it.
+            // Release-desktop rule: a monitor with no shader gets NO window at all, so the
+            // user's real Windows wallpaper shows through and no swapchain VRAM / render
+            // thread is spent on it.
             if layers.is_empty() {
                 continue;
             }
 
-            // Idempotent: this monitor already has a live window - leave it be.
+            // Idempotent: this monitor already has a live shader window - leave it be.
             if existing.contains(&monitor_id) {
                 continue;
             }
@@ -573,22 +1408,24 @@ fn sync_wallpaper_windows(
     store: WallpaperWindowStore,
     pending_close: PendingCloseStore,
 ) {
-    // Which monitors should currently own a window?  Mirror the same
-    // effective-layers rule used when spawning: in span mode every monitor wants
-    // a window iff the PRIMARY display has a shader (they all show its canvas
-    // slice); otherwise a monitor wants a window iff it has its own shader.
+    // A monitor's shader layers (video excluded - video never gets a wgpu window; the
+    // daemon reconcile, invoked by spawn_wallpaper_windows below, owns video teardown).
+    let has_shader = |m: &controller::MonitorInfo| {
+        m.layers.iter().any(|l| controller::video_wallpaper_path(&l.wallpaper_path).is_none())
+    };
+
+    // Which monitors should currently own a wgpu (shader) window?  Mirror the spawn
+    // rule: in span mode every monitor wants one iff the PRIMARY display has a shader
+    // (they all show its canvas slice); otherwise a monitor wants one iff it has its
+    // own shader.
     let want_window: Vec<String> = {
         let state = app_state.read().unwrap();
         let span = state.span_monitors;
-        let primary_has_layers = controller::primary_monitor(&state.monitors)
-            .map(|m| !m.layers.is_empty())
+        let primary_has_shader = controller::primary_monitor(&state.monitors)
+            .map(|m| has_shader(m))
             .unwrap_or(false);
-        state
-            .monitors
-            .iter()
-            .filter(|m| {
-                if span { primary_has_layers } else { !m.layers.is_empty() }
-            })
+        state.monitors.iter()
+            .filter(|m| if span { primary_has_shader } else { has_shader(m) })
             .map(|m| m.id.clone())
             .collect()
     };
@@ -987,7 +1824,12 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             item.source_url = SharedString::from(&w.source_url);
             item.tags = ModelRc::from(Rc::new(VecModel::from(w.tags.iter().map(|t| SharedString::from(t.as_str())).collect::<Vec<_>>())));
             item.is_parallax = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Parallax"));
-            item.is_imported = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Imported"));
+            // Deletability is by LOCATION (user import/parallax/video dirs), not a tag -
+            // tags aren't persisted, so a tag-only check loses the delete button on
+            // restart. is_user_deletable is stable across restarts.
+            item.is_imported = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Imported"))
+                || controller::is_user_deletable(&w.path);
+            item.is_video = w.tags.iter().any(|t| t.eq_ignore_ascii_case("video"));
             item.visible = true;
             if let Some(ref thumb) = w.thumbnail {
                 if let Ok(slint_img) = Image::load_from_path(thumb) {
@@ -1052,6 +1894,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                 positioning: SharedString::from(&l.positioning),
                 visible: l.visible,
                 blend_mode: SharedString::from(&l.blend_mode),
+                is_video: controller::video_wallpaper_path(&l.wallpaper_path).is_some(),
                 x: l.transform[0], y: l.transform[1], width: l.transform[2], height: l.transform[3],
             }).collect();
             layers_model.set_vec(initial);
@@ -1183,42 +2026,67 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         }
     });
 
+    // Holds the picked .mp4 path between the file dialog and the naming dialog's confirm.
+    let pending_video_import: Rc<std::cell::RefCell<Option<std::path::PathBuf>>> =
+        Rc::new(std::cell::RefCell::new(None));
+
     let app_state_import = app_state.clone();
     let wallpapers_model_import = wallpapers_model.clone();
     let push_toast_import = push_toast.clone();
     let thumb_tx_import = thumb_tx.clone();
     let thumbnails_busy_import = thumbnails_busy.clone();
+    let ui_handle_import = ui.as_weak();
+    let pending_video_set = pending_video_import.clone();
     ui.on_import_requested(move || {
         if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Shader or Wallpaper (.zip, .json)", &["zip", "json"])
+            .add_filter("Wallpaper (.mp4, .webm, .zip, .json)", &["mp4", "webm", "zip", "json"])
+            .add_filter("Video (.mp4, .webm)", &["mp4", "webm"])
             .add_filter("Shadertoy export (.json)", &["json"])
             .add_filter("Wallpaper / Shadertoy ZIP (.zip)", &["zip"])
             .pick_file()
         {
-            // Imported shaders/packs go to %APPDATA%/strata/import (user data).
-            let dest_base = match controller::import_library_dir() {
-                Some(d) => d,
-                None => {
-                    push_toast_import("Import Failed", "Could not resolve the user data directory.", true);
-                    return;
-                }
-            };
-            std::fs::create_dir_all(&dest_base).ok();
+            let is_video = path.extension().and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("mp4") || e.eq_ignore_ascii_case("webm"))
+                .unwrap_or(false);
 
-            // Route the import: a `.json` (or a `.zip` that isn't a native Strata
-            // pack) is a Shadertoy export and is converted to our manifest+glsl
-            // format; a `.zip` that contains manifest.toml is a native pack.
-            let is_json = path.extension().and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("json")).unwrap_or(false);
-            let is_shadertoy = is_json || !controller::zip_is_native_pack(&path);
-            let import_result = if is_shadertoy {
-                controller::import_shadertoy(&path, &dest_base)
-                    .map(|(p, warnings)| {
-                        for w in &warnings { log::warn!("Shadertoy import note: {}", w); }
-                        p
-                    })
-            } else {
-                import_wallpaper_zip(&path, &dest_base)
+            // Movie wallpaper: don't import yet - open the naming dialog first (default =
+            // file name), then finish in on_video_import_confirmed. Mirrors parallax save.
+            if is_video {
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("video").to_string();
+                *pending_video_set.borrow_mut() = Some(path.clone());
+                if let Some(ui) = ui_handle_import.upgrade() {
+                    ui.set_video_name_default(SharedString::from(stem));
+                    ui.set_show_video_name_dialog(true);
+                }
+                return;
+            }
+
+            let import_result = {
+                // Imported shaders/packs go to %APPDATA%/Strata/import (user data).
+                let dest_base = match controller::import_library_dir() {
+                    Some(d) => d,
+                    None => {
+                        push_toast_import("Import Failed", "Could not resolve the user data directory.", true);
+                        return;
+                    }
+                };
+                std::fs::create_dir_all(&dest_base).ok();
+
+                // Route the import: a `.json` (or a `.zip` that isn't a native Strata
+                // pack) is a Shadertoy export and is converted to our manifest+glsl
+                // format; a `.zip` that contains manifest.toml is a native pack.
+                let is_json = path.extension().and_then(|e| e.to_str())
+                    .map(|e| e.eq_ignore_ascii_case("json")).unwrap_or(false);
+                let is_shadertoy = is_json || !controller::zip_is_native_pack(&path);
+                if is_shadertoy {
+                    controller::import_shadertoy(&path, &dest_base)
+                        .map(|(p, warnings)| {
+                            for w in &warnings { log::warn!("Shadertoy import note: {}", w); }
+                            p
+                        })
+                } else {
+                    import_wallpaper_zip(&path, &dest_base)
+                }
             };
 
             match import_result {
@@ -1235,7 +2103,12 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                         item.source_url = SharedString::from(&w.source_url);
                         item.tags = ModelRc::from(Rc::new(VecModel::from(w.tags.iter().map(|t| SharedString::from(t.as_str())).collect::<Vec<_>>())));
                         item.is_parallax = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Parallax"));
-                        item.is_imported = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Imported"));
+                        // Deletability is by LOCATION (user import/parallax/video dirs), not a tag -
+            // tags aren't persisted, so a tag-only check loses the delete button on
+            // restart. is_user_deletable is stable across restarts.
+            item.is_imported = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Imported"))
+                || controller::is_user_deletable(&w.path);
+                        item.is_video = w.tags.iter().any(|t| t.eq_ignore_ascii_case("video"));
                         item.visible = true;
                         if let Some(ref thumb) = w.thumbnail {
                             if let Ok(slint_img) = Image::load_from_path(thumb) {
@@ -1254,7 +2127,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                     drop(state);
                     wallpapers_model_import.set_vec(slint_walls);
                     log::info!("Imported wallpaper from {:?}", path.file_name().unwrap());
-                    push_toast_import("Shader Imported", "Converted and added to your library.", false);
+                    push_toast_import("Wallpaper Imported", "Added to your library.", false);
                     // Generate thumbnails for the (new) wallpapers in the background.
                     spawn_thumbnail_generation(dirs, thumb_tx_import.clone(), thumbnails_busy_import.clone());
                 }
@@ -1262,6 +2135,26 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                     log::error!("Import failed: {}", e);
                     push_toast_import("Import Failed", "Shader couldn't be imported - see logs for details.", true);
                 }
+            }
+        }
+    });
+
+    // Finish a movie-wallpaper import once the user has named it in the dialog.
+    let push_toast_vid = push_toast.clone();
+    let ui_handle_vid = ui.as_weak();
+    let pending_video_take = pending_video_import.clone();
+    ui.on_video_import_confirmed(move |name| {
+        let Some(path) = pending_video_take.borrow_mut().take() else { return; };
+        match import_video_wallpaper(&path, name.as_str()) {
+            Ok(_) => {
+                if let Some(ui) = ui_handle_vid.upgrade() {
+                    ui.invoke_refresh_library(); // rescan: adds the new card + its thumbnail
+                }
+                push_toast_vid("Wallpaper Imported", "Your movie wallpaper was added to the library.", false);
+            }
+            Err(e) => {
+                log::error!("Video import failed: {}", e);
+                push_toast_vid("Import Failed", &e, true);
             }
         }
     });
@@ -1414,7 +2307,12 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                 item.source_url = SharedString::from(&w.source_url);
                 item.tags = ModelRc::from(Rc::new(VecModel::from(w.tags.iter().map(|t| SharedString::from(t.as_str())).collect::<Vec<_>>())));
                 item.is_parallax = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Parallax"));
-                item.is_imported = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Imported"));
+                // Deletability is by LOCATION (user import/parallax/video dirs), not a tag -
+            // tags aren't persisted, so a tag-only check loses the delete button on
+            // restart. is_user_deletable is stable across restarts.
+            item.is_imported = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Imported"))
+                || controller::is_user_deletable(&w.path);
+                item.is_video = w.tags.iter().any(|t| t.eq_ignore_ascii_case("video"));
                 item.visible = true;
                 if let Some(ref thumb) = w.thumbnail {
                     if let Ok(slint_img) = Image::load_from_path(thumb) {
@@ -1507,6 +2405,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                                 positioning: SharedString::from(&l.positioning),
                                 visible: l.visible,
                                 blend_mode: SharedString::from(&l.blend_mode),
+                        is_video: controller::video_wallpaper_path(&l.wallpaper_path).is_some(),
                                 x: l.transform[0], y: l.transform[1], width: l.transform[2], height: l.transform[3],
                             }).collect();
                             layers_model_del.set_vec(slint_layers);
@@ -1817,6 +2716,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                         positioning: SharedString::from(&l.positioning),
                         visible: l.visible,
                         blend_mode: SharedString::from(&l.blend_mode),
+                        is_video: controller::video_wallpaper_path(&l.wallpaper_path).is_some(),
                         x: l.transform[0],
                         y: l.transform[1],
                         width: l.transform[2],
@@ -1887,6 +2787,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                         positioning: SharedString::from(&l.positioning),
                         visible: l.visible,
                         blend_mode: SharedString::from(&l.blend_mode),
+                        is_video: controller::video_wallpaper_path(&l.wallpaper_path).is_some(),
                         x: l.transform[0],
                         y: l.transform[1],
                         width: l.transform[2],
@@ -1970,6 +2871,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                         positioning: SharedString::from(&l.positioning),
                         visible: l.visible,
                         blend_mode: SharedString::from(&l.blend_mode),
+                        is_video: controller::video_wallpaper_path(&l.wallpaper_path).is_some(),
                         x: l.transform[0],
                         y: l.transform[1],
                         width: l.transform[2],
@@ -2147,18 +3049,25 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         let monitor_index = ui.get_selected_monitor_index();
         if monitor_index < 0 { return; }
         if let Some(monitor) = state.monitors.get_mut(monitor_index as usize) {
+            let monitor_id = monitor.id.clone();
             if let Some(layer) = monitor.layers.get_mut(layer_index as usize) {
                 layer.positioning = mode.to_string();
+                let is_video = controller::video_wallpaper_path(&layer.wallpaper_path).is_some();
                 if let Some(mut slint_layer) = layers_model_pos.row_data(layer_index as usize) {
-                    slint_layer.positioning = mode;
+                    slint_layer.positioning = mode.clone();
                     layers_model_pos.set_row_data(layer_index as usize, slint_layer);
                 }
-                
+
                 let mut config = config::Config::load();
                 config.update_from_state(state.theme_mode.clone(), state.span_monitors, state.autostart, &state.monitors);
                 config.save().ok();
-                
-                command_tx_pos.send(EngineCommand::Reload).ok();
+
+                if is_video {
+                    // Video: live-update the WebView fit (no render-thread Reload needed).
+                    daemon_set_fit(&monitor_id, positioning_to_object_fit(&mode));
+                } else {
+                    command_tx_pos.send(EngineCommand::Reload).ok();
+                }
             }
         }
     });
@@ -2209,6 +3118,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                         positioning: SharedString::from(&l.positioning),
                         visible: l.visible,
                         blend_mode: SharedString::from(&l.blend_mode),
+                        is_video: controller::video_wallpaper_path(&l.wallpaper_path).is_some(),
                         x: l.transform[0],
                         y: l.transform[1],
                         width: l.transform[2],
@@ -2246,6 +3156,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                         positioning: SharedString::from(&l.positioning),
                         visible: l.visible,
                         blend_mode: SharedString::from(&l.blend_mode),
+                        is_video: controller::video_wallpaper_path(&l.wallpaper_path).is_some(),
                         x: l.transform[0],
                         y: l.transform[1],
                         width: l.transform[2],
@@ -2421,6 +3332,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             }
         }
         let _ = command_tx_shutdown.send(EngineCommand::Shutdown);
+        daemon_shutdown(); // kill the video daemon child now (it would also self-exit on EOF)
         std::process::exit(0);
     });
 
@@ -2748,6 +3660,9 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     let parallax_tune_settle_timer = parallax_tune_settle.clone();
     // Throttle for the periodic "needs download?" recheck on the Parallax tab.
     let parallax_dl_recheck = std::cell::Cell::new(std::time::Instant::now());
+    // Throttle for the video cover-detection check (pause movies under fullscreen apps).
+    let video_pause_recheck = std::cell::Cell::new(std::time::Instant::now());
+    let app_state_vpause = app_state.clone();
 
     // Copy the diagnostics log to the clipboard.
     let logs_model_copy = logs_model.clone();
@@ -2778,6 +3693,12 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
     log::set_max_level(log::LevelFilter::Info);
 
     timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(100), move || {
+        // ── Pause movie wallpapers under fullscreen apps (every ~1s) ──
+        if video_pause_recheck.get().elapsed() >= std::time::Duration::from_millis(1000) {
+            video_pause_recheck.set(std::time::Instant::now());
+            update_video_pause(&app_state_vpause);
+        }
+
         // ── "Updates available" toast ──
         // The weekly check sets this flag from a background thread; show the toast
         // only once the window is actually visible, so a minimized/tray start still
@@ -3188,6 +4109,9 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
 
             let mon_count = app_state_ref.read().map(|s| s.monitors.len()).unwrap_or(0);
 
+            // spawn_wallpaper_windows calls reconcile_video_daemon, which moves/recreates
+            // or tears down video windows to match the new topology (geometry change ->
+            // re-SetVideo; monitor gone -> RemoveVideo).
             spawn_wallpaper_windows(
                 app_state_ref.clone(),
                 command_tx_ref.clone(),
@@ -3665,4 +4589,18 @@ struct Args {
     /// "off" re-enables it.
     #[arg(long)]
     set_mpo: Option<String>,
+
+    /// Dev harness: play a single .mp4 in a window (validates the video decoder).
+    #[arg(long)]
+    video: Option<String>,
+
+    /// Dev harness: play a single .mp4 via a WebView <video> (validates the WebView path).
+    #[arg(long)]
+    video_web: Option<String>,
+
+    /// Internal: run the video-wallpaper daemon (hosts all movie WebViews in a child
+    /// process so WebView2 never loads into the main app). Driven over stdin; spawned and
+    /// killed automatically - not for manual use.
+    #[arg(long)]
+    video_daemon: bool,
 }

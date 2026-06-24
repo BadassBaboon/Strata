@@ -190,9 +190,23 @@ pub fn parallax_library_dir() -> Option<PathBuf> {
     user_data_dir().map(|d| d.join("parallax-wallpapers"))
 }
 
-/// Where imported Shadertoy shaders are saved: `%APPDATA%/strata/import`.
+/// Where imported Shadertoy shaders are saved: `%APPDATA%/Strata/import`.
 pub fn import_library_dir() -> Option<PathBuf> {
     user_data_dir().map(|d| d.join("import"))
+}
+
+/// Where imported video (movie) wallpapers are saved: `%APPDATA%/Strata/import-video`.
+/// Each is a self-contained pack: `<name>/{ video.<ext>, manifest.toml, thumbnail.png }`.
+pub fn import_video_dir() -> Option<PathBuf> {
+    user_data_dir().map(|d| d.join("import-video"))
+}
+
+/// If `dir` is a VIDEO wallpaper (its manifest has a `[wallpaper].video` entry), returns
+/// the absolute path to the video file. Used by the render loop to decide whether to
+/// play a movie instead of building shader pipelines.
+pub fn video_wallpaper_path(dir: &Path) -> Option<PathBuf> {
+    let cfg = WallpaperConfig::load_from_dir(dir).ok()?;
+    cfg.wallpaper.video.map(|v| dir.join(v))
 }
 
 /// The bundled, curated wallpaper library shipped with the app. CWD-relative for
@@ -235,6 +249,7 @@ pub fn library_roots() -> Vec<PathBuf> {
     roots.extend(fetched_library_dir());
     roots.extend(parallax_library_dir());
     roots.extend(import_library_dir());
+    roots.extend(import_video_dir());
     roots
 }
 
@@ -263,7 +278,7 @@ pub fn official_owner_repo() -> Option<(String, String)> {
 /// therefore be deleted from the Library. The bundled library is never deletable.
 pub fn is_user_deletable(path: &Path) -> bool {
     let canon = path.canonicalize().ok();
-    [parallax_library_dir(), import_library_dir()]
+    [parallax_library_dir(), import_library_dir(), import_video_dir()]
         .into_iter()
         .flatten()
         .filter_map(|r| r.canonicalize().ok())

@@ -39,7 +39,7 @@ export global L10n {
     out property <string> tab-settings:      "Settings";
     out property <string> tab-diagnostics:   "Diagnostics";
     out property <string> btn-quit:          "Quit";
-    out property <string> btn-import:        "Import Shader";
+    out property <string> btn-import:        "Import Wallpaper";
     out property <string> search-placeholder:"Search shaders and tags...";
     out property <string> no-wallpapers:     "No wallpapers found. Click Import to add one.";
 
@@ -121,6 +121,7 @@ export struct WallpaperItem {
     is-active:     bool,   // applied to at least one monitor
     is-parallax:   bool,   // shader vs parallax asset (badge)
     is-imported:   bool,   // imported from a Shadertoy export (red badge + delete)
+    is-video:      bool,   // movie (.mp4) wallpaper (red film badge + delete)
 }
 
 export struct LayerItem {
@@ -130,6 +131,7 @@ export struct LayerItem {
     positioning:      string,
     visible:          bool,
     blend-mode:       string,   // normal | additive | multiply
+    is-video:         bool,     // .mp4 wallpaper: show Fit selector instead of Blend
     x: float, y: float, width: float, height: float,
 }
 
@@ -1211,6 +1213,7 @@ component LayerList inherits VerticalLayout {
     callback remove(int);
     callback opacity-changed(int, float);
     callback blend-changed(int, string);
+    callback positioning-changed(int, string);
     callback visibility-toggled(int, bool);
     callback edit-requested(int);
 
@@ -1232,7 +1235,20 @@ component LayerList inherits VerticalLayout {
                 SqBtn { icon: layer.visible ? "eye" : "eye-off"; clicked => { root.visibility-toggled(i, !layer.visible); } }
                 SqBtn { icon: "trash-2"; danger: true; clicked => { root.remove(i); } }
             }
-            VerticalLayout {
+            // Video wallpapers don't blend like shaders - they get a fit/scaling mode
+            // instead. Shaders keep the traditional blend-mode control.
+            if layer.is-video : VerticalLayout {
+                spacing: 6px;
+                Text { text: "FIT MODE"; color: Theme.palette.text-muted; font-size: 8px; font-weight: 800; letter-spacing: 1px; }
+                Select {
+                    options: ["Fill", "Fit", "Stretch", "Center"];
+                    current: layer.positioning == "Fit" ? "Fit"
+                           : layer.positioning == "Stretch" ? "Stretch"
+                           : layer.positioning == "Center" || layer.positioning == "Custom" ? "Center" : "Fill";
+                    selected(v) => { root.positioning-changed(i, v); }
+                }
+            }
+            if !layer.is-video : VerticalLayout {
                 spacing: 6px;
                 Text { text: "BLEND MODE"; color: Theme.palette.text-muted; font-size: 8px; font-weight: 800; letter-spacing: 1px; }
                 Select {
@@ -1280,6 +1296,7 @@ component LayerStack inherits VerticalLayout {
     callback remove(int);
     callback opacity-changed(int, float);
     callback blend-changed(int, string);
+    callback positioning-changed(int, string);
     callback visibility-toggled(int, bool);
     callback edit-requested(int);
 
@@ -1319,6 +1336,7 @@ component LayerStack inherits VerticalLayout {
                 remove(i) => { root.remove(i); }
                 opacity-changed(i, o) => { root.opacity-changed(i, o); }
                 blend-changed(i, b) => { root.blend-changed(i, b); }
+                positioning-changed(i, p) => { root.positioning-changed(i, p); }
                 visibility-toggled(i, v) => { root.visibility-toggled(i, v); }
                 edit-requested(i) => { root.edit-requested(i); }
             }
@@ -1331,6 +1349,7 @@ component LayerStack inherits VerticalLayout {
         remove(i) => { root.remove(i); }
         opacity-changed(i, o) => { root.opacity-changed(i, o); }
         blend-changed(i, b) => { root.blend-changed(i, b); }
+        positioning-changed(i, p) => { root.positioning-changed(i, p); }
         visibility-toggled(i, v) => { root.visibility-toggled(i, v); }
         edit-requested(i) => { root.edit-requested(i); }
     }
@@ -1347,6 +1366,7 @@ component WallpaperCard inherits Rectangle {
     in property <bool>    is-active;
     in property <bool>    is-parallax;
     in property <bool>    is-imported;
+    in property <bool>    is-video;
     in property <string>  source-url;
     callback toggle-monitor(int);
     callback delete-requested();
@@ -1428,7 +1448,7 @@ component WallpaperCard inherits Rectangle {
 
                 // Delete - for user-generated cards: Parallax Studio creations and
                 // imported Shadertoy shaders.
-                if is-parallax || is-imported : Rectangle {
+                if is-parallax || is-imported || is-video : Rectangle {
                     width: 32px; height: 32px; border-radius: 10px;
                     background: del-ta.has-hover ? Theme.palette.danger : #00000066;
                     border-width: 1px; border-color: #ffffff1a;
@@ -1442,11 +1462,11 @@ component WallpaperCard inherits Rectangle {
                 // otherwise - tinted RED when the shader was imported from Shadertoy.
                 Rectangle {
                     width: 32px; height: 32px; border-radius: 10px;
-                    background: is-parallax ? #3b82f633 : (is-imported ? #ef444433 : #00000066);
-                    border-width: 1px; border-color: is-parallax ? #3b82f6aa : (is-imported ? #ef4444aa : #ffffff1a);
+                    background: is-video ? #ef444433 : (is-parallax ? #3b82f633 : (is-imported ? #ef444433 : #00000066));
+                    border-width: 1px; border-color: is-video ? #ef4444aa : (is-parallax ? #3b82f6aa : (is-imported ? #ef4444aa : #ffffff1a));
                     Icon {
-                        name: is-parallax ? "sparkles" : "zap"; size: 16px;
-                        color: is-parallax ? #3b82f6 : (is-imported ? #ef4444 : Theme.palette.selection);
+                        name: is-video ? "video" : (is-parallax ? "sparkles" : "zap"); size: 16px;
+                        color: is-video ? #ef4444 : (is-parallax ? #3b82f6 : (is-imported ? #ef4444 : Theme.palette.selection));
                         x: (parent.width - self.width)/2; y: (parent.height - self.height)/2;
                     }
                 }
@@ -2352,6 +2372,10 @@ export component AppWindow inherits Window {
     callback theme-changed(string);
     callback quit-requested();
     callback import-requested();
+    // Movie-wallpaper import naming dialog (parallel to the parallax save dialog).
+    in-out property <bool>   show-video-name-dialog: false;
+    in-out property <string> video-name-default: "";
+    callback video-import-confirmed(string); // the chosen name ("" = use file name)
     callback refresh-library();
     callback wallpaper-delete-requested(int);
     // Open an external URL (e.g. a shader's original Shadertoy page) in the browser.
@@ -2676,6 +2700,7 @@ export component AppWindow inherits Window {
                                             is-active:     wallpaper.is-active;
                                             is-parallax:   wallpaper.is-parallax;
                                             is-imported:   wallpaper.is-imported;
+                                            is-video:      wallpaper.is-video;
                                             source-url:    wallpaper.source-url;
                                             open-url(u) => { root.open-url(u); }
                                             toggle-monitor(idx) => { root.apply-to-monitor(idx, wallpaper.name); }
@@ -2777,6 +2802,7 @@ export component AppWindow inherits Window {
                         remove(i) => { root.layer-remove-requested(i); }
                         opacity-changed(i, o) => { root.layer-opacity-changed(i, o); }
                         blend-changed(i, b) => { root.layer-blend-changed(i, b); }
+                        positioning-changed(i, p) => { root.layer-positioning-changed(i, p); }
                         visibility-toggled(i, v) => { root.layer-visibility-toggled(i, v); }
                         edit-requested(i) => {
                             root.editing-layer = i;
@@ -3083,6 +3109,47 @@ export component AppWindow inherits Window {
                         description: t.description;
                         destructive: t.destructive;
                         dismissed => { root.toast-dismissed(t.id); }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── "Name your movie wallpaper" dialog (opened on .mp4 import) ────────────
+    if root.show-video-name-dialog : Rectangle {
+        background: #000000aa;
+        TouchArea { clicked => { root.show-video-name-dialog = false; } }
+        Rectangle {
+            width: 400px; height: vid-name-col.preferred-height + 48px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: Theme.palette.card;
+            border-radius: 16px; border-width: 1px; border-color: Theme.palette.border;
+            drop-shadow-blur: 40px; drop-shadow-color: #00000066;
+            TouchArea {}
+            vid-name-col := VerticalLayout {
+                padding: 24px; spacing: 14px;
+                // Prefill with the file name each time the dialog opens.
+                init => { vid-name-input.text = root.video-name-default; }
+                Text { text: "Name your movie wallpaper"; font-size: 16px; font-weight: 700; color: Theme.palette.text; }
+                Text { text: "Leave blank to use the video's file name."; font-size: 12px; color: Theme.palette.text-muted; wrap: word-wrap; }
+                vid-name-input := BlueInput { placeholder: "My Movie Wallpaper"; }
+                HorizontalLayout {
+                    spacing: 12px; alignment: end;
+                    Rectangle {
+                        width: 96px; height: 44px; border-radius: 12px;
+                        background: vid-cancel-ta.has-hover ? Theme.palette.card-hover : transparent;
+                        border-width: 1px; border-color: Theme.palette.border;
+                        Text { text: "CANCEL"; color: Theme.palette.text-muted; font-size: 11px; font-weight: 800; letter-spacing: 1px;
+                               horizontal-alignment: center; vertical-alignment: center; }
+                        vid-cancel-ta := TouchArea { clicked => { root.show-video-name-dialog = false; } mouse-cursor: pointer; }
+                    }
+                    PillButton {
+                        width: 160px; btn-height: 44px; text: "IMPORT"; icon: "save";
+                        clicked => {
+                            root.video-import-confirmed(vid-name-input.text);
+                            root.show-video-name-dialog = false;
+                        }
                     }
                 }
             }
