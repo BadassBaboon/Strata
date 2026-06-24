@@ -439,16 +439,6 @@ component AppearanceSettings inherits VerticalLayout {
             ThemeModeButton { horizontal-stretch: 1; icon: "moon"; text: "Dark"; active: Theme.mode == "dark"; clicked => { Theme.mode = "dark"; root.theme-changed("dark"); } }
             ThemeModeButton { horizontal-stretch: 1; icon: "laptop"; text: "System"; active: Theme.mode == "system"; clicked => { Theme.mode = "system"; root.theme-changed("system"); } }
         }
-        Divider {}
-        HorizontalLayout {
-            spacing: 16px;
-            VerticalLayout {
-                horizontal-stretch: 1; spacing: 4px;
-                Text { text: "Adaptive UI Color Sync"; font-size: 16px; font-weight: 700; color: Theme.palette.text; }
-                Text { text: "Automatically synchronize UI theme with active wallpaper chroma. (Coming soon)"; font-size: 12px; color: Theme.palette.text-muted; wrap: word-wrap; }
-            }
-            VerticalLayout { alignment: center; Toggle { checked: false; enabled: false; } }
-        }
     }
 }
 
@@ -1488,27 +1478,32 @@ component WallpaperCard inherits Rectangle {
                 }
                 // Attribution: "Made by <author>". When a source URL is known the
                 // author is rendered as an accent-colored hyperlink that opens the
-                // original page (satisfies Shadertoy's credit clause).
-                if root.author != "" : HorizontalLayout {
-                    spacing: 4px; alignment: start;
-                    Text {
-                        text: "Made by";
-                        color: Theme.palette.text-muted;
-                        font-size: 12px;
-                        vertical-alignment: center;
-                    }
-                    author-txt := Text {
-                        text: root.author;
-                        color: root.source-url != ""
-                            ? (link-ta.has-hover ? Theme.palette.selection.brighter(0.2) : Theme.palette.selection)
-                            : Theme.palette.text-muted;
-                        font-size: 12px; font-weight: 600;
-                        vertical-alignment: center;
-                        overflow: elide;
-                        link-ta := TouchArea {
-                            enabled: root.source-url != "";
-                            mouse-cursor: pointer;
-                            clicked => { root.open-url(root.source-url); }
+                // original page (satisfies Shadertoy's credit clause). Fixed-height row
+                // so cards WITHOUT an author (e.g. movie wallpapers) stay the same total
+                // height as shader cards instead of rendering shorter.
+                Rectangle {
+                    height: 16px;
+                    HorizontalLayout {
+                        spacing: 4px; alignment: start;
+                        if root.author != "" : Text {
+                            text: "Made by";
+                            color: Theme.palette.text-muted;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                        if root.author != "" : author-txt := Text {
+                            text: root.author;
+                            color: root.source-url != ""
+                                ? (link-ta.has-hover ? Theme.palette.selection.brighter(0.2) : Theme.palette.selection)
+                                : Theme.palette.text-muted;
+                            font-size: 12px; font-weight: 600;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            link-ta := TouchArea {
+                                enabled: root.source-url != "";
+                                mouse-cursor: pointer;
+                                clicked => { root.open-url(root.source-url); }
+                            }
                         }
                     }
                 }
@@ -2308,7 +2303,7 @@ component ToastCard inherits Rectangle {
 }
 
 export component AppWindow inherits Window {
-    title: "Strata - Live Wallpaper Engine";
+    title: "Strata";
     min-width: 960px; min-height: 680px;
     background: Theme.palette.background;
     default-font-family: Theme.font-body;

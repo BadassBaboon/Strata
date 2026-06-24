@@ -3980,8 +3980,13 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             // Whether anything is actually being rendered - drives the "Inactive"
             // state on the diagnostics cards (avoids a scary 0 FPS / LOW / -0 MB
             // when no shader is assigned).
+            // Movies don't feed the engine telemetry (no wgpu render thread), so a
+            // movie-only desktop should read "inactive", not 0 FPS. Count only visible
+            // SHADER layers (path NOT under the import-video dir - cheap, no disk read).
+            let video_dir = controller::import_video_dir();
             let engine_active = app_state_timer.read()
-                .map(|s| s.monitors.iter().any(|m| m.layers.iter().any(|l| l.visible)))
+                .map(|s| s.monitors.iter().any(|m| m.layers.iter().any(|l| l.visible
+                    && !video_dir.as_ref().is_some_and(|vd| l.wallpaper_path.starts_with(vd)))))
                 .unwrap_or(false);
             ui.set_engine_active(engine_active);
 

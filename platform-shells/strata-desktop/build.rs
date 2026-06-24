@@ -9,6 +9,10 @@ fn main() {
         println!("cargo:rerun-if-changed={icon}");
         let mut res = winresource::WindowsResource::new();
         res.set_icon(icon);
+        // Task Manager shows the exe's FileDescription for processes without a titled
+        // window (e.g. the video daemon child). Keep it simply "Strata" for both.
+        res.set("FileDescription", "Strata");
+        res.set("ProductName", "Strata");
         if let Err(e) = res.compile() {
             println!("cargo:warning=failed to embed exe icon: {e}");
         }
