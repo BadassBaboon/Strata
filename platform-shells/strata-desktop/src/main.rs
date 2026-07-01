@@ -3933,7 +3933,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                             ui.show().ok();
                             ui_visible_timer.set(true);
                             hidden_to_tray_timer.set(false);
-                            let _ = toggle_item_timer.set_text("Hide Strata");
+                            toggle_item_timer.set_text("Hide Strata");
                             // Restore the exact placement saved at close (maximized state +
                             // monitor). If it landed MAXIMIZED, that resize repaints the
                             // window on its own. Otherwise the restored size may equal the
@@ -3952,7 +3952,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                             ui.hide().ok();
                             ui_visible_timer.set(false);
                             hidden_to_tray_timer.set(true);
-                            let _ = toggle_item_timer.set_text("Show Strata");
+                            toggle_item_timer.set_text("Show Strata");
                         }
                     } else if event.id == "quit" { std::process::exit(0); }
                 }
@@ -4043,7 +4043,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             {
                 platform::windows::save_window_placement(ui_hwnd_close.get());
                 hidden_to_tray_close.set(true);
-                let _ = toggle_item_close.set_text("Show Strata");
+                toggle_item_close.set_text("Show Strata");
             }
             ui.hide().ok();
             ui_visible_close.set(false); // hidden to tray - pause unseen work
@@ -4147,7 +4147,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         #[cfg(target_os = "windows")]
         {
             hidden_to_tray.set(true);
-            let _ = tray_toggle_item.set_text("Show Strata");
+            tray_toggle_item.set_text("Show Strata");
         }
         // Don't call ui.show() - the loop below stays alive without any window.
     } else {
