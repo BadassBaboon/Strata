@@ -61,7 +61,7 @@ pub struct Config {
 
 /// Default screensaver idle timeout in minutes.
 pub fn default_screensaver_timeout_mins() -> u32 {
-    10
+    3
 }
 
 /// Default library sort: bundled shaders A-Z with user content at the bottom.

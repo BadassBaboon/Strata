@@ -721,6 +721,18 @@ component ScreensaverSettings inherits VerticalLayout {
     callback clear-screensaver();
     callback open-windows-settings();
 
+    pure function snap-timeout(v: float) -> int {
+        let r = Math.round(v);
+        return Math.abs(v - 3)  <= 0.8 ? 3
+             : Math.abs(v - 5)  <= 0.8 ? 5
+             : Math.abs(v - 10) <= 1.2 ? 10
+             : Math.abs(v - 20) <= 1.5 ? 20
+             : Math.abs(v - 30) <= 1.5 ? 30
+             : Math.abs(v - 45) <= 2.0 ? 45
+             : Math.abs(v - 60) <= 2.0 ? 60
+             : r;
+    }
+
     spacing: 16px;
     SectionLabel { icon: "moon"; text: "SCREENSAVER"; }
     SettingsPanel {
@@ -789,17 +801,19 @@ component ScreensaverSettings inherits VerticalLayout {
                 }
             }
             AccentSlider {
-                minimum: 1; maximum: 120; value: root.screensaver-timeout-mins;
-                changed(v) => { root.screensaver-timeout-changed(Math.round(v)); }
+                minimum: 1; maximum: 60; value: root.screensaver-timeout-mins;
+                changed(v) => { root.screensaver-timeout-changed(root.snap-timeout(v)); }
             }
             HorizontalLayout {
-                Text { text: "1 Min"; font-size: 9px; font-weight: 800; letter-spacing: 1px; color: Theme.palette.text-muted; horizontal-stretch: 1; }
-                Text { text: "15 Min"; font-size: 9px; font-weight: 800; color: root.screensaver-timeout-mins == 15 ? Theme.palette.accent : Theme.palette.text-muted; }
+                Text { text: "1 Min"; font-size: 9px; font-weight: 800; letter-spacing: 1px; color: root.screensaver-timeout-mins == 1 ? Theme.palette.accent : Theme.palette.text-muted; horizontal-stretch: 1; }
+                Text { text: "5 Min"; font-size: 9px; font-weight: 800; color: root.screensaver-timeout-mins == 5 ? Theme.palette.accent : Theme.palette.text-muted; }
+                Rectangle { width: 12px; }
+                Text { text: "10 Min"; font-size: 9px; font-weight: 800; color: root.screensaver-timeout-mins == 10 ? Theme.palette.accent : Theme.palette.text-muted; }
+                Rectangle { width: 12px; }
+                Text { text: "20 Min"; font-size: 9px; font-weight: 800; color: root.screensaver-timeout-mins == 20 ? Theme.palette.accent : Theme.palette.text-muted; }
                 Rectangle { width: 12px; }
                 Text { text: "30 Min"; font-size: 9px; font-weight: 800; color: root.screensaver-timeout-mins == 30 ? Theme.palette.accent : Theme.palette.text-muted; }
-                Rectangle { width: 12px; }
-                Text { text: "60 Min"; font-size: 9px; font-weight: 800; color: root.screensaver-timeout-mins == 60 ? Theme.palette.accent : Theme.palette.text-muted; }
-                Text { text: "120 Min"; font-size: 9px; font-weight: 800; letter-spacing: 1px; color: Theme.palette.text-muted; horizontal-stretch: 1; horizontal-alignment: right; }
+                Text { text: "60 Min"; font-size: 9px; font-weight: 800; letter-spacing: 1px; color: root.screensaver-timeout-mins == 60 ? Theme.palette.accent : Theme.palette.text-muted; horizontal-stretch: 1; horizontal-alignment: right; }
             }
         }
         Divider {}
@@ -825,11 +839,12 @@ component ScreensaverSettings inherits VerticalLayout {
             VerticalLayout {
                 alignment: center;
                 Rectangle {
-                    height: 34px; width: btn-row.preferred-width + 24px; border-radius: 8px;
-                    background: btn-ta.has-hover ? Theme.palette.accent.with-alpha(0.12) : Theme.palette.card-hover;
+                    height: 34px; width: btn-row.preferred-width; border-radius: 8px;
+                    background: btn-ta.has-hover ? Theme.palette.accent.with-alpha(0.15) : Theme.palette.card-hover;
+                    border-width: 1px; border-color: btn-ta.has-hover ? Theme.palette.accent.with-alpha(0.3) : Theme.palette.border;
                     animate background { duration: 120ms; }
                     btn-row := HorizontalLayout {
-                        padding-left: 12px; padding-right: 12px; spacing: 6px; alignment: center;
+                        padding-left: 14px; padding-right: 14px; spacing: 6px; alignment: center;
                         Icon { name: "external-link"; size: 14px; color: Theme.palette.accent; y: (parent.height - self.height)/2; }
                         Text { text: "Open Settings"; font-size: 12px; font-weight: 700; color: Theme.palette.text; vertical-alignment: center; }
                     }
@@ -2632,7 +2647,7 @@ export component AppWindow inherits Window {
     in-out property <bool>   screensaver-enabled: false;
     in-out property <string> screensaver-wallpaper-path: "";
     in-out property <string> screensaver-wallpaper-name: "";
-    in-out property <int>    screensaver-timeout-mins: 10;
+    in-out property <int>    screensaver-timeout-mins: 3;
     in-out property <bool>   screensaver-secure: false;
     in-out property <string> search-query: "";
     // Library thumbnail refresh: `refreshing` is true while the background thumb
@@ -3233,17 +3248,17 @@ export component AppWindow inherits Window {
             // panels always fill the width and never clip out of the window.
             if root.active-tab == "settings" : settings-area := Rectangle {
                 vertical-stretch: 1;
-                property <bool> two-col: root.width >= 1080px;
+                property <bool> two-col: root.width >= 1200px;
                 ScrollView {
                     VerticalLayout {
                         width: settings-area.width - 26px;
                         padding: 4px;
 
-                        // ── Wide: two columns (7 / 5) ─────────────────────────
+                        // ── Wide: two columns (equal width 1 / 1) ─────────────
                         if settings-area.two-col : HorizontalLayout {
-                            spacing: 32px; alignment: stretch;
+                            spacing: 24px; alignment: stretch;
                             VerticalLayout {
-                                horizontal-stretch: 7; spacing: 24px; alignment: start;
+                                horizontal-stretch: 1; spacing: 24px; alignment: start;
                                 AppearanceSettings { theme-changed(m) => { root.theme-changed(m); } }
                                 IntegrationsSettings { }
                                 UpdatesSettings {
@@ -3260,7 +3275,7 @@ export component AppWindow inherits Window {
                                 }
                             }
                             VerticalLayout {
-                                horizontal-stretch: 5; spacing: 24px; alignment: start;
+                                horizontal-stretch: 1; spacing: 24px; alignment: start;
                                 SystemControlSettings {
                                     autostart: root.autostart; disable-mpo: root.disable-mpo; fps-cap: root.fps-cap;
                                     shader-quality: root.shader-quality; vsync-mode: root.vsync-mode;

@@ -1691,6 +1691,7 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
     // Shared, live-tunable frame-rate cap read by every monitor render loop.
     // The Settings slider stores into this; render threads pick it up next frame.
     let target_fps = Arc::new(std::sync::atomic::AtomicU32::new(config.target_fps.clamp(1, 240)));
+    let screensaver_timeout = Arc::new(std::sync::atomic::AtomicU32::new(config.screensaver_timeout_mins.clamp(1, 60)));
 
     // Audio sensitivity: authoritative value lives in the AudioEngine (read by the
     // render threads); this Cell mirrors it for the debounced config flush.
@@ -1866,11 +1867,14 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
     update_library_group_counts(&ui, &initial_items);
     let wallpapers_model = Rc::new(VecModel::<WallpaperItem>::from(initial_items));
     ui.set_wallpapers(ModelRc::from(wallpapers_model.clone()));
-    // Safety check: ensure Strata.scr exists in AppData if screensaver is enabled
+    // Safety check: ensure strata-screensaver.scr exists in AppData if screensaver is enabled
     if config.screensaver_enabled {
         if let Some(user_data) = controller::user_data_dir() {
             let _ = std::fs::create_dir_all(&user_data);
-            let scr_path = user_data.join("Strata.scr");
+            let scr_path = user_data.join("strata-screensaver.scr");
+            // Remove legacy Strata.scr if present
+            let old_scr = user_data.join("Strata.scr");
+            if old_scr.exists() { let _ = std::fs::remove_file(&old_scr); }
             if let Ok(exe_path) = std::env::current_exe() {
                 let should_copy = !scr_path.exists() || {
                     let m_exe = std::fs::metadata(&exe_path).ok();
@@ -1882,7 +1886,7 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
                 };
                 if should_copy {
                     if std::fs::copy(&exe_path, &scr_path).is_err() && !scr_path.exists() {
-                        log::warn!("Strata.scr missing and could not be created; disabling screensaver.");
+                        log::warn!("strata-screensaver.scr missing and could not be created; disabling screensaver.");
                         config.screensaver_enabled = false;
                         config.screensaver_wallpaper_path = String::new();
                         config.save().ok();
@@ -3038,12 +3042,12 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
         });
     }
 
+    let screensaver_timeout_ui = screensaver_timeout.clone();
+    let config_dirty_timeout = config_dirty.clone();
     ui.on_screensaver_timeout_changed(move |timeout| {
-        let mut cfg = config::Config::load();
-        cfg.screensaver_timeout_mins = timeout as u32;
-        cfg.save().ok();
-        #[cfg(target_os = "windows")]
-        platform::windows::sync_screensaver_registry(cfg.screensaver_enabled, cfg.screensaver_timeout_mins, cfg.screensaver_secure).ok();
+        let clamped = (timeout.clamp(1, 60)) as u32;
+        screensaver_timeout_ui.store(clamped, std::sync::atomic::Ordering::Relaxed);
+        config_dirty_timeout.set(true);
     });
 
     ui.on_screensaver_secure_toggled(move |secure| {
@@ -3549,6 +3553,7 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
     let mouse_mode_quit = mouse_mode.clone();
     let mouse_sensitivity_quit = mouse_sensitivity.clone();
     let quality_scale_quit = quality_scale.clone();
+    let screensaver_timeout_quit = screensaver_timeout.clone();
     ui.on_quit_requested(move || {
         // Flush any pending debounced config change before exiting abruptly.
         if config_dirty_quit.get() {
@@ -3556,7 +3561,8 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
                 flush_config(&st, target_fps_quit.load(std::sync::atomic::Ordering::Relaxed), audio_sensitivity_quit.get(),
                     u8_to_mouse_mode(mouse_mode_quit.load(std::sync::atomic::Ordering::Relaxed)),
                     f32::from_bits(mouse_sensitivity_quit.load(std::sync::atomic::Ordering::Relaxed)),
-                    f32::from_bits(quality_scale_quit.load(std::sync::atomic::Ordering::Relaxed)));
+                    f32::from_bits(quality_scale_quit.load(std::sync::atomic::Ordering::Relaxed)),
+                    screensaver_timeout_quit.load(std::sync::atomic::Ordering::Relaxed));
             }
         }
         let _ = command_tx_shutdown.send(EngineCommand::Shutdown);
@@ -3836,6 +3842,7 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
     let config_dirty_timer = config_dirty.clone();
     let app_state_timer = app_state.clone();
     let target_fps_timer = target_fps.clone();
+    let screensaver_timeout_timer = screensaver_timeout.clone();
     let mouse_mode_timer = mouse_mode.clone();
     let mouse_sensitivity_timer = mouse_sensitivity.clone();
     let context_timer = context.clone();
@@ -3980,6 +3987,7 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
                     u8_to_mouse_mode(mouse_mode_timer.load(std::sync::atomic::Ordering::Relaxed)),
                     f32::from_bits(mouse_sensitivity_timer.load(std::sync::atomic::Ordering::Relaxed)),
                     f32::from_bits(quality_scale_timer.load(std::sync::atomic::Ordering::Relaxed)),
+                    screensaver_timeout_timer.load(std::sync::atomic::Ordering::Relaxed),
                 );
             }
             if let Ok(exe) = std::env::current_exe() {
@@ -4025,7 +4033,8 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
                 flush_config(&st, target_fps_timer.load(std::sync::atomic::Ordering::Relaxed), audio_sensitivity_timer.get(),
                     u8_to_mouse_mode(mouse_mode_timer.load(std::sync::atomic::Ordering::Relaxed)),
                     f32::from_bits(mouse_sensitivity_timer.load(std::sync::atomic::Ordering::Relaxed)),
-                    f32::from_bits(quality_scale_timer.load(std::sync::atomic::Ordering::Relaxed)));
+                    f32::from_bits(quality_scale_timer.load(std::sync::atomic::Ordering::Relaxed)),
+                    screensaver_timeout_timer.load(std::sync::atomic::Ordering::Relaxed));
             }
             config_dirty_timer.set(false);
         }
@@ -4725,7 +4734,7 @@ fn refresh_parallax_download_state(ui: &AppWindow) {
     ui.set_parallax_models_need_download(!missing.is_empty());
 }
 
-fn flush_config(state: &AppState, target_fps: u32, audio_sensitivity: f32, mouse_mode: &str, mouse_sensitivity: f32, quality_scale: f32) {
+fn flush_config(state: &AppState, target_fps: u32, audio_sensitivity: f32, mouse_mode: &str, mouse_sensitivity: f32, quality_scale: f32, screensaver_timeout_mins: u32) {
     let mut config = config::Config::load();
     config.update_from_state(state.theme_mode.clone(), state.span_monitors, state.autostart, &state.monitors);
     config.target_fps = target_fps;
@@ -4733,7 +4742,13 @@ fn flush_config(state: &AppState, target_fps: u32, audio_sensitivity: f32, mouse
     config.mouse_mode = mouse_mode.to_string();
     config.mouse_sensitivity = mouse_sensitivity;
     config.shader_quality = scale_to_shader_quality(quality_scale).to_string();
+    let timeout_changed = config.screensaver_timeout_mins != screensaver_timeout_mins;
+    config.screensaver_timeout_mins = screensaver_timeout_mins;
     config.save().ok();
+    if timeout_changed {
+        #[cfg(target_os = "windows")]
+        platform::windows::sync_screensaver_registry(config.screensaver_enabled, config.screensaver_timeout_mins, config.screensaver_secure).ok();
+    }
 }
 
 /// Mouse-interactivity mode label → engine code (0=Off, 1=All, 2=Only shaders,

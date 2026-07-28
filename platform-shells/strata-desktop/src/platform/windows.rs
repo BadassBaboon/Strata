@@ -361,7 +361,12 @@ pub fn sync_screensaver_registry(enabled: bool, timeout_mins: u32, secure: bool)
 
         let mut copy_ok = true;
         if let (Some(user_data), Ok(exe_path)) = (crate::controller::user_data_dir(), std::env::current_exe()) {
-            let scr_path = user_data.join("Strata.scr");
+            let scr_path = user_data.join("strata-screensaver.scr");
+            // Remove legacy Strata.scr if present
+            let old_scr_path = user_data.join("Strata.scr");
+            if old_scr_path.exists() {
+                let _ = std::fs::remove_file(&old_scr_path);
+            }
             let should_copy = !scr_path.exists() || {
                 let m_exe = std::fs::metadata(&exe_path).ok();
                 let m_scr = std::fs::metadata(&scr_path).ok();
@@ -372,7 +377,7 @@ pub fn sync_screensaver_registry(enabled: bool, timeout_mins: u32, secure: bool)
             };
             if should_copy {
                 if let Err(e) = std::fs::copy(&exe_path, &scr_path) {
-                    log::error!("Failed to copy Strata.scr to AppData: {}", e);
+                    log::error!("Failed to copy strata-screensaver.scr to AppData: {}", e);
                     if !scr_path.exists() {
                         copy_ok = false;
                     }
