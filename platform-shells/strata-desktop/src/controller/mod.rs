@@ -209,15 +209,28 @@ pub fn video_wallpaper_path(dir: &Path) -> Option<PathBuf> {
     cfg.wallpaper.video.map(|v| dir.join(v))
 }
 
-/// The bundled, curated wallpaper library shipped with the app. CWD-relative for
-/// now; the planned Strata-Library decoupling will move this to
-/// `%APPDATA%/strata/strata-library`.
+/// The bundled, curated wallpaper library shipped with the app. Resolves relative
+/// to the executable so it works from any CWD (including System32, which is the
+/// working directory when Windows invokes Strata.scr as a screensaver).
 pub fn bundled_library_dir() -> PathBuf {
-    if Path::new("wallpapers").exists() {
-        PathBuf::from("wallpapers")
-    } else {
-        PathBuf::from("../../wallpapers")
+    // Resolve from the exe's parent dir first (release layout: next to the binary).
+    // Fall back to CWD-relative "wallpapers" then "../../wallpapers" (dev layout).
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let candidate = exe_dir.join("wallpapers");
+            if candidate.exists() {
+                return candidate;
+            }
+            // Dev layout: exe is at target/debug/ or target/release/ — wallpapers
+            // are two levels up in the workspace root.
+            let dev_candidate = exe_dir.join("..").join("..").join("wallpapers");
+            if dev_candidate.exists() {
+                return dev_candidate;
+            }
+        }
     }
+    // Final fallback for any other layout.
+    PathBuf::from("wallpapers")
 }
 
 /// The runtime-fetched shader library: `%APPDATA%/strata/strata-library/shader-library`
@@ -303,13 +316,21 @@ pub fn scan_all_wallpapers() -> Vec<WallpaperEntry> {
 
 /// Directory of bundled Shadertoy assets (`assets/external`) - the shared texture/
 /// cubemap library that shaders reference by name (NOT copied per-wallpaper).
-/// CWD-relative like `bundled_library_dir()` for now.
+/// Resolves relative to the executable, not CWD, for screensaver mode compatibility.
 pub fn assets_external_dir() -> PathBuf {
-    if Path::new("assets/external").exists() {
-        PathBuf::from("assets/external")
-    } else {
-        PathBuf::from("../../assets/external")
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let candidate = exe_dir.join("assets").join("external");
+            if candidate.exists() {
+                return candidate;
+            }
+            let dev_candidate = exe_dir.join("..").join("..").join("assets").join("external");
+            if dev_candidate.exists() {
+                return dev_candidate;
+            }
+        }
     }
+    PathBuf::from("assets/external")
 }
 
 /// All shared asset search roots, in priority order. Registered with the engine

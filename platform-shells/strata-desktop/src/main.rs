@@ -177,10 +177,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::set_var("SLINT_BACKEND", "winit-software");
     }
 
-    // Register the shared asset roots so shaders resolve textures/cubemaps by name
-    // from the library `external/` dir instead of carrying copies per-wallpaper.
-    core_engine::set_asset_dirs(controller::library_asset_dirs());
-
     // GUI-subsystem release builds have no console of their own. If we were
     // launched from a terminal (e.g. `strata-desktop.exe --version`), attach to
     // the parent's console so clap's version/help text is actually visible.
@@ -190,6 +186,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS,
         );
     }
+
+    // ── Screensaver argument detection MUST come before clap::Args::parse() ──
+    //
+    // Windows runs screensavers as: `Strata.scr /s` (run), `Strata.scr /p <hwnd>`
+    // (preview), `Strata.scr /c` (configure). These are standard Windows screensaver
+    // conventions and not valid clap arguments. If Args::parse() runs first it sees
+    // `/s` as an unknown flag, prints an error, and exits — the screensaver never starts.
+    //
+    // We also detect execution directly as a `.scr` file with no args (double-click
+    // in Explorer), which Windows also treats as a screensaver run.
+    let raw_args: Vec<String> = std::env::args().collect();
+    let is_ss_run = raw_args.iter().any(|a| a.eq_ignore_ascii_case("/s") || a.starts_with("/s:") || a.starts_with("/S:"));
+    let is_ss_config = raw_args.iter().any(|a| a.eq_ignore_ascii_case("/c") || a.starts_with("/c:") || a.starts_with("/C:"));
+    let is_ss_preview = raw_args.iter().any(|a| a.eq_ignore_ascii_case("/p") || a.starts_with("/p:") || a.starts_with("/P:"));
+
+    let is_scr_file = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase().ends_with(".scr")))
+        .unwrap_or(false);
+
+    if is_ss_run || is_ss_preview || (is_scr_file && !is_ss_config) {
+        return run_screensaver_mode(is_ss_preview);
+    }
+
+    // Register the shared asset roots so shaders resolve textures/cubemaps by name
+    // from the library `external/` dir instead of carrying copies per-wallpaper.
+    core_engine::set_asset_dirs(controller::library_asset_dirs());
 
     let args = Args::parse();
 
@@ -216,20 +239,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return run_video_daemon();
     }
 
-    let raw_args: Vec<String> = std::env::args().collect();
-    let is_ss_run = raw_args.iter().any(|a| a.eq_ignore_ascii_case("/s") || a.starts_with("/s:") || a.starts_with("/S:"));
-    let is_ss_config = raw_args.iter().any(|a| a.eq_ignore_ascii_case("/c") || a.starts_with("/c:") || a.starts_with("/C:"));
-    let is_ss_preview = raw_args.iter().any(|a| a.eq_ignore_ascii_case("/p") || a.starts_with("/p:") || a.starts_with("/P:"));
-
-    let is_scr_file = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase().ends_with(".scr")))
-        .unwrap_or(false);
-
-    if is_ss_run || is_ss_preview || (is_scr_file && raw_args.len() <= 1) {
-        return run_screensaver_mode(is_ss_preview);
-    }
-
     if let Some(wallpaper_path) = args.cli {
         env_logger::init();
         run_cli_mode(wallpaper_path)
@@ -244,17 +253,30 @@ fn run_screensaver_mode(is_preview_mode: bool) -> Result<(), Box<dyn std::error:
     use winit::event_loop::EventLoop;
     use winit::window::Window;
 
+    // Initialize logger first — this runs from any CWD (including System32 when
+    // Windows invokes Strata.scr /s), so all paths must be absolute.
     let (log_tx, _log_rx) = channel::<String>();
     let logger = SlintLogger { sender: log_tx, file: std::sync::Mutex::new(open_log_file()) };
     let _ = log::set_boxed_logger(Box::new(logger));
     log::set_max_level(log::LevelFilter::Info);
     log::info!("=== Starting Strata Screensaver mode (preview={}) ===", is_preview_mode);
+    log::info!("Screensaver CWD: {:?}", std::env::current_dir().unwrap_or_default());
+    log::info!("Screensaver exe: {:?}", std::env::current_exe().unwrap_or_default());
+    log::info!("Screensaver args: {:?}", std::env::args().collect::<Vec<_>>());
+
+    // Register asset dirs using exe-relative paths (not CWD-relative: CWD=System32 in
+    // screensaver mode breaks all relative library lookups).
+    core_engine::set_asset_dirs(controller::library_asset_dirs());
 
     let cfg = config::Config::load();
+    log::info!("Screensaver config loaded. ss_enabled={} ss_path={:?}",
+        cfg.screensaver_enabled, cfg.screensaver_wallpaper_path);
+
     let mut ss_path = std::path::PathBuf::from(&cfg.screensaver_wallpaper_path);
     if cfg.screensaver_wallpaper_path.is_empty() || !ss_path.exists() {
         log::warn!("Configured screensaver path {:?} missing or empty; scanning library for fallback.", ss_path);
         let scanned = controller::scan_all_wallpapers();
+        log::info!("Library scan returned {} wallpaper(s).", scanned.len());
         if let Some(first) = scanned.first() {
             ss_path = first.path.clone();
             log::info!("Fallback screensaver wallpaper selected: {:?}", ss_path);
@@ -262,6 +284,8 @@ fn run_screensaver_mode(is_preview_mode: bool) -> Result<(), Box<dyn std::error:
             log::error!("No wallpapers available in library to run as screensaver.");
             return Ok(());
         }
+    } else {
+        log::info!("Using configured screensaver wallpaper: {:?}", ss_path);
     }
 
     struct ScreensaverApp {
