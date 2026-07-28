@@ -254,6 +254,9 @@ component AccentSlider inherits Rectangle {
     property <float> ratio: (root.maximum - root.minimum) > 0
         ? Math.max(0, Math.min(1, (root.value - root.minimum) / (root.maximum - root.minimum)))
         : 0;
+    property <float> active-ratio: ta.pressed
+        ? Math.max(0, Math.min(1, ta.mouse-x / root.width))
+        : root.ratio;
 
     function set-from-x(mx: length) {
         root.changed(root.minimum + Math.max(0, Math.min(1, mx / root.width)) * (root.maximum - root.minimum));
@@ -266,7 +269,7 @@ component AccentSlider inherits Rectangle {
         background: Theme.is-dark ? #ffffff1f : #00000017;
         Rectangle {
             x: 0; y: 0; height: 100%;
-            width: parent.width * root.ratio;
+            width: parent.width * root.active-ratio;
             border-radius: 3px;
             background: Theme.palette.accent;
         }
@@ -274,7 +277,7 @@ component AccentSlider inherits Rectangle {
     // Thumb
     Rectangle {
         width: thumb-size; height: thumb-size; border-radius: thumb-size / 2;
-        x: (root.width - thumb-size) * root.ratio;
+        x: (root.width - thumb-size) * root.active-ratio;
         y: (parent.height - thumb-size) / 2;
         background: #ffffff;
         border-width: 2px; border-color: Theme.palette.accent;
@@ -721,18 +724,6 @@ component ScreensaverSettings inherits VerticalLayout {
     callback clear-screensaver();
     callback open-windows-settings();
 
-    pure function snap-timeout(v: float) -> int {
-        let r = Math.round(v);
-        return Math.abs(v - 3)  <= 0.8 ? 3
-             : Math.abs(v - 5)  <= 0.8 ? 5
-             : Math.abs(v - 10) <= 1.2 ? 10
-             : Math.abs(v - 20) <= 1.5 ? 20
-             : Math.abs(v - 30) <= 1.5 ? 30
-             : Math.abs(v - 45) <= 2.0 ? 45
-             : Math.abs(v - 60) <= 2.0 ? 60
-             : r;
-    }
-
     spacing: 16px;
     SectionLabel { icon: "moon"; text: "SCREENSAVER"; }
     SettingsPanel {
@@ -802,7 +793,7 @@ component ScreensaverSettings inherits VerticalLayout {
             }
             AccentSlider {
                 minimum: 1; maximum: 60; value: root.screensaver-timeout-mins;
-                changed(v) => { root.screensaver-timeout-changed(root.snap-timeout(v)); }
+                changed(v) => { root.screensaver-timeout-changed(Math.round(v)); }
             }
             HorizontalLayout {
                 Text { text: "1 Min"; font-size: 9px; font-weight: 800; letter-spacing: 1px; color: root.screensaver-timeout-mins == 1 ? Theme.palette.accent : Theme.palette.text-muted; horizontal-stretch: 1; }
@@ -845,7 +836,7 @@ component ScreensaverSettings inherits VerticalLayout {
                     animate background { duration: 120ms; }
                     btn-row := HorizontalLayout {
                         padding-left: 14px; padding-right: 14px; spacing: 6px; alignment: center;
-                        Icon { name: "external-link"; size: 14px; color: Theme.palette.accent; y: (parent.height - self.height)/2; }
+                        Icon { name: "laptop"; size: 14px; color: Theme.palette.accent; y: (parent.height - self.height)/2; }
                         Text { text: "Open Settings"; font-size: 12px; font-weight: 700; color: Theme.palette.text; vertical-alignment: center; }
                     }
                     btn-ta := TouchArea { clicked => { root.open-windows-settings(); } mouse-cursor: pointer; }
@@ -1707,12 +1698,13 @@ component WallpaperCard inherits Rectangle {
 
                 // Avatars of monitors this wallpaper is applied to
                 HorizontalLayout {
-                    spacing: -6px; alignment: start;
+                    spacing: -6px; alignment: start; y: (parent.height - self.height)/2;
                     for count[i] in root.usage-counts : Rectangle {
                         visible: count > 0;
                         width: count > 0 ? 28px : 0px; height: 28px; border-radius: 14px;
                         background: mon-color(i);
                         border-width: 2px; border-color: Theme.palette.card;
+                        y: (parent.height - self.height)/2;
                         Text {
                             text: i + 1;
                             color: #ffffff; font-size: 11px; font-weight: 800;
@@ -1721,11 +1713,12 @@ component WallpaperCard inherits Rectangle {
                     }
                     if root.is-screensaver : Rectangle {
                         width: 28px; height: 28px; border-radius: 14px;
-                        background: Theme.is-dark ? #ffffff : #000000;
+                        background: Theme.palette.accent;
                         border-width: 2px; border-color: Theme.palette.card;
+                        y: (parent.height - self.height)/2;
                         Text {
                             text: "zzz";
-                            color: Theme.is-dark ? #000000 : #ffffff;
+                            color: #ffffff;
                             font-size: 10px; font-weight: 900;
                             horizontal-alignment: center; vertical-alignment: center;
                         }
