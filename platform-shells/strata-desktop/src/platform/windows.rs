@@ -342,6 +342,17 @@ pub fn monitor_covered(origin: (i32, i32), size: (u32, u32)) -> bool {
     ctx.covered
 }
 
+/// Helper to resolve AppData\Roaming\Strata directory
+pub fn get_strata_appdata_dir() -> Option<std::path::PathBuf> {
+    let dir = if let Ok(appdata) = std::env::var("APPDATA") {
+        std::path::PathBuf::from(appdata).join("Strata")
+    } else {
+        std::path::PathBuf::from("C:\\Users\\Default\\AppData\\Roaming\\Strata")
+    };
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
 /// Synchronize screensaver settings directly with the Windows Registry.
 #[cfg(target_os = "windows")]
 pub fn sync_screensaver_registry(enabled: bool, timeout_mins: u32, secure: bool) -> Result<(), String> {
@@ -356,9 +367,14 @@ pub fn sync_screensaver_registry(enabled: bool, timeout_mins: u32, secure: bool)
             return Err(format!("Failed to open Windows Registry Desktop key: error {}", res));
         }
 
-        if let Ok(exe_path) = std::env::current_exe() {
-            let scr_path = exe_path.with_file_name("strata.scr");
-            if !scr_path.exists() {
+        if let (Some(appdata_dir), Ok(exe_path)) = (get_strata_appdata_dir(), std::env::current_exe()) {
+            let scr_path = appdata_dir.join("Strata.scr");
+            let should_copy = !scr_path.exists() || {
+                let m1 = std::fs::metadata(&exe_path).and_then(|m| m.modified()).ok();
+                let m2 = std::fs::metadata(&scr_path).and_then(|m| m.modified()).ok();
+                m1 != m2
+            };
+            if should_copy {
                 let _ = std::fs::copy(&exe_path, &scr_path);
             }
             if enabled {
@@ -386,8 +402,8 @@ pub fn sync_screensaver_registry(enabled: bool, timeout_mins: u32, secure: bool)
 /// Open the official Windows Screen Saver Settings dialog.
 #[cfg(target_os = "windows")]
 pub fn open_windows_screensaver_settings() {
-    let _ = std::process::Command::new("control")
-        .arg("desk.cpl,,@screensaver")
+    let _ = std::process::Command::new("rundll32.exe")
+        .args(["shell32.dll,Control_RunDLL", "desk.cpl,,@screensaver"])
         .spawn();
 }
 

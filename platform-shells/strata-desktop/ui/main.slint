@@ -722,7 +722,7 @@ component ScreensaverSettings inherits VerticalLayout {
     callback open-windows-settings();
 
     spacing: 16px;
-    SectionLabel { icon: "moon"; text: "WINDOWS SCREENSAVER"; }
+    SectionLabel { icon: "moon"; text: "SCREENSAVER"; }
     SettingsPanel {
         // Active Screensaver Wallpaper
         HorizontalLayout {
@@ -731,7 +731,7 @@ component ScreensaverSettings inherits VerticalLayout {
                 horizontal-stretch: 1; spacing: 6px;
                 HorizontalLayout {
                     spacing: 8px; alignment: start;
-                    Text { text: "Active Screensaver Wallpaper"; font-size: 15px; font-weight: 700; color: Theme.palette.text; vertical-alignment: center; }
+                    Text { text: "Screensaver Live Wallpaper"; font-size: 15px; font-weight: 700; color: Theme.palette.text; vertical-alignment: center; }
                     Rectangle {
                         height: 20px; width: status-tag.preferred-width + 14px; border-radius: 5px;
                         background: (root.screensaver-enabled && root.screensaver-wallpaper-name != "") ? #22c55e1a : #ef44441a;
@@ -819,8 +819,8 @@ component ScreensaverSettings inherits VerticalLayout {
             spacing: 16px; alignment: space-between;
             VerticalLayout {
                 horizontal-stretch: 1; spacing: 4px;
-                Text { text: "Windows System Dialog"; font-size: 15px; font-weight: 700; color: Theme.palette.text; }
-                Text { text: "Open official Windows Screen Saver Control Panel."; font-size: 12px; color: Theme.palette.text-muted; }
+                Text { text: "Windows Screen Saver Settings"; font-size: 15px; font-weight: 700; color: Theme.palette.text; }
+                Text { text: "Open the windows screen saver settings panel."; font-size: 12px; color: Theme.palette.text-muted; }
             }
             VerticalLayout {
                 alignment: center;
@@ -831,7 +831,7 @@ component ScreensaverSettings inherits VerticalLayout {
                     btn-row := HorizontalLayout {
                         padding-left: 12px; padding-right: 12px; spacing: 6px; alignment: center;
                         Icon { name: "external-link"; size: 14px; color: Theme.palette.accent; y: (parent.height - self.height)/2; }
-                        Text { text: "Open Windows Settings"; font-size: 12px; font-weight: 700; color: Theme.palette.text; vertical-alignment: center; }
+                        Text { text: "Open Settings"; font-size: 12px; font-weight: 700; color: Theme.palette.text; vertical-alignment: center; }
                     }
                     btn-ta := TouchArea { clicked => { root.open-windows-settings(); } mouse-cursor: pointer; }
                 }
@@ -1527,19 +1527,21 @@ component WallpaperCard inherits Rectangle {
     border-bottom-left-radius: 16px;
     border-bottom-right-radius: 16px;
     background: Theme.palette.card;
-    drop-shadow-blur: is-active ? 30px : (card-ta.has-hover ? 26px : 14px);
-    drop-shadow-color: is-active ? Theme.palette.selection.with-alpha(0.30) : #00000038;
+    border-width: (is-active || is-screensaver) ? 2px : 1px;
+    border-color: (is-active || is-screensaver) ? Theme.palette.selection : Theme.palette.border;
+    drop-shadow-blur: (is-active || is-screensaver) ? 30px : (card-ta.has-hover ? 26px : 14px);
+    drop-shadow-color: (is-active || is-screensaver) ? Theme.palette.selection.with-alpha(0.30) : #00000038;
     drop-shadow-offset-y: 8px;
     clip: true;
 
-    animate drop-shadow-blur, drop-shadow-color { duration: 300ms; easing: ease; }
+    animate drop-shadow-blur, drop-shadow-color, border-color { duration: 300ms; easing: ease; }
 
     card-ta := TouchArea { mouse-cursor: default; }
 
     VerticalLayout {
         padding: 0; spacing: 0;
 
-        // â"€â"€ Preview band (16:10) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+        // ── Preview band (16:10) ─────────────────────────────────────────
         Rectangle {
             height: root.width * 10 / 16;
             // Full-bleed thumbnail with SHARP top corners - the card's top edge is sharp
@@ -1572,7 +1574,7 @@ component WallpaperCard inherits Rectangle {
             }
 
             // Active pill (top-left)
-            if is-active : Rectangle {
+            if is-active || is-screensaver : Rectangle {
                 x: 12px; y: 12px;
                 height: 22px; width: active-row.preferred-width + 20px;
                 border-radius: 11px;

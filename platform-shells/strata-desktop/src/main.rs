@@ -221,11 +221,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let is_ss_config = raw_args.iter().any(|a| a.eq_ignore_ascii_case("/c") || a.starts_with("/c:") || a.starts_with("/C:"));
     let is_ss_preview = raw_args.iter().any(|a| a.eq_ignore_ascii_case("/p") || a.starts_with("/p:") || a.starts_with("/P:"));
 
+    let is_scr_file = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase().ends_with(".scr")))
+        .unwrap_or(false);
+
     if is_ss_preview {
         return Ok(());
     }
 
-    if is_ss_run {
+    if is_ss_run || (is_scr_file && raw_args.len() <= 1) {
         env_logger::init();
         return run_screensaver_mode();
     }
@@ -245,12 +250,14 @@ fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
     use winit::window::Window;
 
     let cfg = config::Config::load();
-    if cfg.screensaver_wallpaper_path.is_empty() {
-        return Ok(());
-    }
-    let ss_path = std::path::PathBuf::from(&cfg.screensaver_wallpaper_path);
-    if !ss_path.exists() {
-        return Ok(());
+    let mut ss_path = std::path::PathBuf::from(&cfg.screensaver_wallpaper_path);
+    if cfg.screensaver_wallpaper_path.is_empty() || !ss_path.exists() {
+        let scanned = controller::scan_all_wallpapers();
+        if let Some(first) = scanned.first() {
+            ss_path = first.path.clone();
+        } else {
+            return Ok(());
+        }
     }
 
     struct ScreensaverApp {
@@ -260,6 +267,7 @@ fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
         context: Option<Arc<core_engine::GraphicsContext>>,
         rt: tokio::runtime::Runtime,
         initial_cursor: Option<(f64, f64)>,
+        start_time: std::time::Instant,
     }
 
     impl ApplicationHandler for ScreensaverApp {
@@ -293,21 +301,27 @@ fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         fn window_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, _id: winit::window::WindowId, event: WindowEvent) {
+            let startup_elapsed = self.start_time.elapsed().as_millis() > 500;
             match event {
                 WindowEvent::CursorMoved { position, .. } => {
-                    if let Some((init_x, init_y)) = self.initial_cursor {
-                        let dx = (position.x - init_x).abs();
-                        let dy = (position.y - init_y).abs();
-                        if dx > 10.0 || dy > 10.0 {
-                            event_loop.exit();
+                    if startup_elapsed {
+                        if let Some((init_x, init_y)) = self.initial_cursor {
+                            let dx = (position.x - init_x).abs();
+                            let dy = (position.y - init_y).abs();
+                            if dx > 10.0 || dy > 10.0 {
+                                event_loop.exit();
+                            }
+                        } else {
+                            self.initial_cursor = Some((position.x, position.y));
                         }
-                    } else {
-                        self.initial_cursor = Some((position.x, position.y));
                     }
                 }
-                WindowEvent::MouseInput { .. }
-                | WindowEvent::KeyboardInput { .. }
-                | WindowEvent::CloseRequested => {
+                WindowEvent::MouseInput { .. } | WindowEvent::KeyboardInput { .. } => {
+                    if startup_elapsed {
+                        event_loop.exit();
+                    }
+                }
+                WindowEvent::CloseRequested => {
                     event_loop.exit();
                 }
                 WindowEvent::RedrawRequested => {
@@ -334,6 +348,7 @@ fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
         context: None,
         rt: tokio::runtime::Runtime::new()?,
         initial_cursor: None,
+        start_time: std::time::Instant::now(),
     };
     event_loop.run_app(&mut app)?;
     Ok(())
