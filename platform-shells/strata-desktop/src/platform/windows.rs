@@ -398,7 +398,7 @@ pub fn sync_screensaver_registry(enabled: bool, timeout_mins: u32, secure: bool)
 
         // Broadcast setting change & update system in-memory screensaver idle timer
         let flags = SPIF_UPDATEINIFILE | SPIF_SENDCHANGE;
-        SystemParametersInfoW(SPI_SETSCREENSAVEACTIVE, if enabled { 1 } else { 0 }, std::ptr::null_mut(), flags);
+        SystemParametersInfoW(SPI_SETSCREENSAVEACTIVE, if effective_enabled { 1 } else { 0 }, std::ptr::null_mut(), flags);
         SystemParametersInfoW(SPI_SETSCREENSAVETIMEOUT, timeout_sec, std::ptr::null_mut(), flags);
     }
     Ok(())

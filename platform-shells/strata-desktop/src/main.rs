@@ -227,8 +227,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(false);
 
     if is_ss_run || is_ss_preview || (is_scr_file && raw_args.len() <= 1) {
-        env_logger::init();
-        return run_screensaver_mode();
+        return run_screensaver_mode(is_ss_preview);
     }
 
     if let Some(wallpaper_path) = args.cli {
@@ -239,7 +238,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
+fn run_screensaver_mode(is_preview_mode: bool) -> Result<(), Box<dyn std::error::Error>> {
     use winit::application::ApplicationHandler;
     use winit::event::WindowEvent;
     use winit::event_loop::EventLoop;
@@ -249,7 +248,7 @@ fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
     let logger = SlintLogger { sender: log_tx, file: std::sync::Mutex::new(open_log_file()) };
     let _ = log::set_boxed_logger(Box::new(logger));
     log::set_max_level(log::LevelFilter::Info);
-    log::info!("=== Starting Strata Screensaver mode ===");
+    log::info!("=== Starting Strata Screensaver mode (preview={}) ===", is_preview_mode);
 
     let cfg = config::Config::load();
     let mut ss_path = std::path::PathBuf::from(&cfg.screensaver_wallpaper_path);
@@ -273,6 +272,7 @@ fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
         rt: tokio::runtime::Runtime,
         initial_cursor: Option<(f64, f64)>,
         start_time: std::time::Instant,
+        is_preview_mode: bool,
     }
 
     impl ApplicationHandler for ScreensaverApp {
@@ -309,27 +309,37 @@ fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         fn window_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, _id: winit::window::WindowId, event: WindowEvent) {
-            let startup_elapsed = self.start_time.elapsed().as_millis() > 500;
+            let elapsed_ms = self.start_time.elapsed().as_millis();
+            let is_preview = self.is_preview_mode;
             match event {
                 WindowEvent::CursorMoved { position, .. } => {
-                    if startup_elapsed {
+                    if self.initial_cursor.is_none() || elapsed_ms < 1500 {
+                        self.initial_cursor = Some((position.x, position.y));
+                    } else if !is_preview {
                         if let Some((init_x, init_y)) = self.initial_cursor {
                             let dx = (position.x - init_x).abs();
                             let dy = (position.y - init_y).abs();
-                            if dx > 10.0 || dy > 10.0 {
+                            if dx > 40.0 || dy > 40.0 {
+                                log::info!("Screensaver exiting due to mouse movement (dx={:.1}, dy={:.1})", dx, dy);
                                 event_loop.exit();
                             }
-                        } else {
-                            self.initial_cursor = Some((position.x, position.y));
                         }
                     }
                 }
-                WindowEvent::MouseInput { .. } | WindowEvent::KeyboardInput { .. } => {
-                    if startup_elapsed {
+                WindowEvent::MouseInput { state: winit::event::ElementState::Pressed, .. } => {
+                    if elapsed_ms > 1500 && !is_preview {
+                        log::info!("Screensaver exiting due to mouse button click");
+                        event_loop.exit();
+                    }
+                }
+                WindowEvent::KeyboardInput { event: kb_event, .. } => {
+                    if kb_event.state == winit::event::ElementState::Pressed && elapsed_ms > 500 && !is_preview {
+                        log::info!("Screensaver exiting due to keyboard input");
                         event_loop.exit();
                     }
                 }
                 WindowEvent::CloseRequested => {
+                    log::info!("Screensaver exiting due to CloseRequested");
                     event_loop.exit();
                 }
                 WindowEvent::RedrawRequested => {
@@ -357,6 +367,7 @@ fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
         rt: tokio::runtime::Runtime::new()?,
         initial_cursor: None,
         start_time: std::time::Instant::now(),
+        is_preview_mode,
     };
     event_loop.run_app(&mut app)?;
     Ok(())
