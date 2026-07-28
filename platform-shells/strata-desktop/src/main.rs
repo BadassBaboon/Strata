@@ -245,13 +245,22 @@ fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
     use winit::event_loop::EventLoop;
     use winit::window::Window;
 
+    let (log_tx, _log_rx) = channel::<String>();
+    let logger = SlintLogger { sender: log_tx, file: std::sync::Mutex::new(open_log_file()) };
+    let _ = log::set_boxed_logger(Box::new(logger));
+    log::set_max_level(log::LevelFilter::Info);
+    log::info!("=== Starting Strata Screensaver mode ===");
+
     let cfg = config::Config::load();
     let mut ss_path = std::path::PathBuf::from(&cfg.screensaver_wallpaper_path);
     if cfg.screensaver_wallpaper_path.is_empty() || !ss_path.exists() {
+        log::warn!("Configured screensaver path {:?} missing or empty; scanning library for fallback.", ss_path);
         let scanned = controller::scan_all_wallpapers();
         if let Some(first) = scanned.first() {
             ss_path = first.path.clone();
+            log::info!("Fallback screensaver wallpaper selected: {:?}", ss_path);
         } else {
+            log::error!("No wallpapers available in library to run as screensaver.");
             return Ok(());
         }
     }
@@ -275,12 +284,14 @@ fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
             self.context = Some(context.clone());
 
             let monitors = controller::discover_monitors();
+            log::info!("Screensaver discovered {} monitor(s).", monitors.len());
             for mon in &monitors {
                 let attributes = Window::default_attributes()
                     .with_title("Strata Screensaver")
                     .with_inner_size(winit::dpi::PhysicalSize::new(mon.resolution.0, mon.resolution.1))
                     .with_position(winit::dpi::PhysicalPosition::new(mon.position.0, mon.position.1))
                     .with_decorations(false)
+                    .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
                     .with_active(true);
                 if let Ok(window) = event_loop.create_window(attributes) {
                     let win_arc = Arc::new(window);
@@ -290,6 +301,7 @@ fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
                             let _ = renderer.add_layer(&self.wallpaper_dir, 1.0, 1.0, "Fill".to_string(), [0.0, 0.0, 1.0, 1.0], "normal".to_string());
                             self.windows.push(win_arc);
                             self.renderers.push(renderer);
+                            log::info!("Screensaver window initialized for monitor at {:?}", mon.position);
                         }
                     }
                 }
@@ -1803,11 +1815,30 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
     update_library_group_counts(&ui, &initial_items);
     let wallpapers_model = Rc::new(VecModel::<WallpaperItem>::from(initial_items));
     ui.set_wallpapers(ModelRc::from(wallpapers_model.clone()));
+    // Safety check: ensure Strata.scr exists in AppData if screensaver is enabled
+    if config.screensaver_enabled {
+        if let Some(user_data) = controller::user_data_dir() {
+            let scr_path = user_data.join("Strata.scr");
+            if !scr_path.exists() {
+                if let Ok(exe_path) = std::env::current_exe() {
+                    if std::fs::copy(&exe_path, &scr_path).is_err() && !scr_path.exists() {
+                        log::warn!("Strata.scr missing and could not be created; disabling screensaver.");
+                        config.screensaver_enabled = false;
+                        config.screensaver_wallpaper_path = String::new();
+                        config.save().ok();
+                        #[cfg(target_os = "windows")]
+                        platform::windows::sync_screensaver_registry(false, config.screensaver_timeout_mins, config.screensaver_secure).ok();
+                    }
+                }
+            }
+        }
+    }
+
     ui.set_screensaver_enabled(config.screensaver_enabled);
     ui.set_screensaver_wallpaper_path(SharedString::from(&config.screensaver_wallpaper_path));
     ui.set_screensaver_timeout_mins(config.screensaver_timeout_mins as i32);
     ui.set_screensaver_secure(config.screensaver_secure);
-    let initial_ss_name = if !config.screensaver_wallpaper_path.is_empty() {
+    let initial_ss_name = if config.screensaver_enabled && !config.screensaver_wallpaper_path.is_empty() {
         let state = app_state.read().unwrap();
         state.wallpapers.iter().find(|w| same_path(&w.path, &config.screensaver_wallpaper_path)).map(|w| w.name.clone()).unwrap_or_default()
     } else {

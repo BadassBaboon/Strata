@@ -359,6 +359,7 @@ pub fn sync_screensaver_registry(enabled: bool, timeout_mins: u32, secure: bool)
             return Err(format!("Failed to open Windows Registry Desktop key: error {}", res));
         }
 
+        let mut copy_ok = true;
         if let (Some(user_data), Ok(exe_path)) = (crate::controller::user_data_dir(), std::env::current_exe()) {
             let scr_path = user_data.join("Strata.scr");
             let should_copy = !scr_path.exists() || {
@@ -367,16 +368,22 @@ pub fn sync_screensaver_registry(enabled: bool, timeout_mins: u32, secure: bool)
                 m1 != m2
             };
             if should_copy {
-                let _ = std::fs::copy(&exe_path, &scr_path);
+                if let Err(e) = std::fs::copy(&exe_path, &scr_path) {
+                    log::error!("Failed to copy Strata.scr to AppData: {}", e);
+                    if !scr_path.exists() {
+                        copy_ok = false;
+                    }
+                }
             }
-            if enabled {
+            if enabled && copy_ok {
                 let path_str = scr_path.to_string_lossy();
                 let path_bytes = format!("{}\0", path_str);
                 RegSetValueExA(key, c"SCRNSAVE.EXE".as_ptr().cast(), 0, REG_SZ, path_bytes.as_ptr(), path_bytes.len() as u32);
             }
         }
 
-        let active_val = if enabled { c"1".as_ptr().cast() } else { c"0".as_ptr().cast() };
+        let effective_enabled = enabled && copy_ok;
+        let active_val = if effective_enabled { c"1".as_ptr().cast() } else { c"0".as_ptr().cast() };
         RegSetValueExA(key, c"ScreenSaveActive".as_ptr().cast(), 0, REG_SZ, active_val, 2);
 
         let timeout_sec = timeout_mins.max(1) * 60;

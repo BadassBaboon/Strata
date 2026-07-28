@@ -1524,8 +1524,6 @@ component WallpaperCard inherits Rectangle {
     // Top corners SHARP so the full-bleed thumbnail sits flush; bottom corners rounded
     // to keep the card polished. (Software renderer can't round-clip the child image, so
     // matching the card's top edge to the image is the clean fix.)
-    border-bottom-left-radius: 16px;
-    border-bottom-right-radius: 16px;
     background: Theme.palette.card;
     border-width: (is-active || is-screensaver) ? 2px : 1px;
     border-color: (is-active || is-screensaver) ? Theme.palette.selection : Theme.palette.border;
@@ -1820,8 +1818,6 @@ component WallpaperCard inherits Rectangle {
     // unlike femtovg, so the border must be its own top-most overlay.) Matches the
     // card shape: sharp top, rounded bottom.
     Rectangle {
-        border-bottom-left-radius: 16px;
-        border-bottom-right-radius: 16px;
         border-width: (root.is-active || root.is-screensaver) ? 2px : 1px;
         border-color: (root.is-active || root.is-screensaver) ? Theme.palette.selection : Theme.palette.border;
         background: transparent;
