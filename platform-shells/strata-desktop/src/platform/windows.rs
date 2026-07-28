@@ -342,22 +342,14 @@ pub fn monitor_covered(origin: (i32, i32), size: (u32, u32)) -> bool {
     ctx.covered
 }
 
-/// Helper to resolve AppData\Roaming\Strata directory
-pub fn get_strata_appdata_dir() -> Option<std::path::PathBuf> {
-    let dir = if let Ok(appdata) = std::env::var("APPDATA") {
-        std::path::PathBuf::from(appdata).join("Strata")
-    } else {
-        std::path::PathBuf::from("C:\\Users\\Default\\AppData\\Roaming\\Strata")
-    };
-    std::fs::create_dir_all(&dir).ok()?;
-    Some(dir)
-}
-
-/// Synchronize screensaver settings directly with the Windows Registry.
+/// Synchronize screensaver settings directly with the Windows Registry and System API.
 #[cfg(target_os = "windows")]
 pub fn sync_screensaver_registry(enabled: bool, timeout_mins: u32, secure: bool) -> Result<(), String> {
     use windows_sys::Win32::System::Registry::{
         RegOpenKeyExA, RegSetValueExA, RegCloseKey, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPI_SETSCREENSAVEACTIVE, SPI_SETSCREENSAVETIMEOUT, SPIF_UPDATEINIFILE, SPIF_SENDCHANGE
     };
 
     unsafe {
@@ -367,8 +359,8 @@ pub fn sync_screensaver_registry(enabled: bool, timeout_mins: u32, secure: bool)
             return Err(format!("Failed to open Windows Registry Desktop key: error {}", res));
         }
 
-        if let (Some(appdata_dir), Ok(exe_path)) = (get_strata_appdata_dir(), std::env::current_exe()) {
-            let scr_path = appdata_dir.join("Strata.scr");
+        if let (Some(user_data), Ok(exe_path)) = (crate::controller::user_data_dir(), std::env::current_exe()) {
+            let scr_path = user_data.join("Strata.scr");
             let should_copy = !scr_path.exists() || {
                 let m1 = std::fs::metadata(&exe_path).and_then(|m| m.modified()).ok();
                 let m2 = std::fs::metadata(&scr_path).and_then(|m| m.modified()).ok();
@@ -387,14 +379,20 @@ pub fn sync_screensaver_registry(enabled: bool, timeout_mins: u32, secure: bool)
         let active_val = if enabled { b"1\0".as_ptr() } else { b"0\0".as_ptr() };
         RegSetValueExA(key, b"ScreenSaveActive\0".as_ptr(), 0, REG_SZ, active_val, 2);
 
-        let timeout_sec = (timeout_mins.max(1) * 60).to_string();
-        let timeout_bytes = format!("{}\0", timeout_sec);
+        let timeout_sec = timeout_mins.max(1) * 60;
+        let timeout_str = timeout_sec.to_string();
+        let timeout_bytes = format!("{}\0", timeout_str);
         RegSetValueExA(key, b"ScreenSaveTimeOut\0".as_ptr(), 0, REG_SZ, timeout_bytes.as_ptr(), timeout_bytes.len() as u32);
 
         let secure_val = if secure { b"1\0".as_ptr() } else { b"0\0".as_ptr() };
         RegSetValueExA(key, b"ScreenSaverIsSecure\0".as_ptr(), 0, REG_SZ, secure_val, 2);
 
         RegCloseKey(key);
+
+        // Broadcast setting change & update system in-memory screensaver idle timer
+        let flags = SPIF_UPDATEINIFILE | SPIF_SENDCHANGE;
+        SystemParametersInfoW(SPI_SETSCREENSAVEACTIVE, if enabled { 1 } else { 0 }, std::ptr::null_mut(), flags);
+        SystemParametersInfoW(SPI_SETSCREENSAVETIMEOUT, timeout_sec, std::ptr::null_mut(), flags);
     }
     Ok(())
 }

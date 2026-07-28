@@ -226,11 +226,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase().ends_with(".scr")))
         .unwrap_or(false);
 
-    if is_ss_preview {
-        return Ok(());
-    }
-
-    if is_ss_run || (is_scr_file && raw_args.len() <= 1) {
+    if is_ss_run || is_ss_preview || (is_scr_file && raw_args.len() <= 1) {
         env_logger::init();
         return run_screensaver_mode();
     }

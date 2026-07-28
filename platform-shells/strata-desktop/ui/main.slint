@@ -1822,8 +1822,8 @@ component WallpaperCard inherits Rectangle {
     Rectangle {
         border-bottom-left-radius: 16px;
         border-bottom-right-radius: 16px;
-        border-width: root.is-active ? 2px : 1px;
-        border-color: root.is-active ? Theme.palette.selection : Theme.palette.border;
+        border-width: (root.is-active || root.is-screensaver) ? 2px : 1px;
+        border-color: (root.is-active || root.is-screensaver) ? Theme.palette.selection : Theme.palette.border;
         background: transparent;
         animate border-color { duration: 300ms; easing: ease; }
     }
