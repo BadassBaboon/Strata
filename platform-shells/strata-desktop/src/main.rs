@@ -282,6 +282,7 @@ fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
                     let win_arc = Arc::new(window);
                     if let Ok(surface) = context.instance.create_surface(win_arc.clone()) {
                         if let Ok(mut renderer) = core_engine::Renderer::new(context.clone(), win_arc.clone(), surface, win_arc.inner_size()) {
+                            renderer.set_mouse_mode(0);
                             let _ = renderer.add_layer(&self.wallpaper_dir, 1.0, 1.0, "Fill".to_string(), [0.0, 0.0, 1.0, 1.0], "normal".to_string());
                             self.windows.push(win_arc);
                             self.renderers.push(renderer);

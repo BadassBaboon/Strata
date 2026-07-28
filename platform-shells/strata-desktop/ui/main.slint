@@ -2776,11 +2776,6 @@ export component AppWindow inherits Window {
                     clicked => { root.active-tab = "parallax"; }
                 }
                 SidebarButton {
-                    icon: "moon"; text: "Screen Saver";
-                    active: root.active-tab == "screensaver";
-                    clicked => { root.active-tab = "screensaver"; }
-                }
-                SidebarButton {
                     icon: "activity"; text: L10n.tab-diagnostics;
                     active: root.active-tab == "diagnostics";
                     clicked => { root.active-tab = "diagnostics"; }
@@ -2820,7 +2815,6 @@ export component AppWindow inherits Window {
                         text: root.active-tab == "library"     ? L10n.title-library
                             : root.active-tab == "compositor"  ? L10n.title-compositor
                             : root.active-tab == "parallax"    ? L10n.title-parallax
-                            : root.active-tab == "screensaver" ? "Screen Saver"
                             : root.active-tab == "diagnostics" ? L10n.title-diagnostics
                             : L10n.title-settings;
                         font-family: Theme.font-headline;
@@ -2833,7 +2827,6 @@ export component AppWindow inherits Window {
                     text: root.active-tab == "library"     ? L10n.sub-library
                         : root.active-tab == "compositor"  ? L10n.sub-compositor
                         : root.active-tab == "parallax"    ? L10n.sub-parallax
-                        : root.active-tab == "screensaver" ? "Configure native Windows screensaver, idle timeout, and password protection."
                         : root.active-tab == "diagnostics" ? L10n.sub-diagnostics
                         : L10n.sub-settings;
                     color: Theme.palette.text-muted; font-size: 14px;
@@ -3193,7 +3186,6 @@ export component AppWindow inherits Window {
             }
 
             // â•گâ•گ Settings tab â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
-            // â•گâ•گ Settings tab â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
             // Two-column on wide windows, single stacked column when narrow so the
             // panels always fill the width and never clip out of the window.
             if root.active-tab == "settings" : settings-area := Rectangle {
@@ -3204,33 +3196,13 @@ export component AppWindow inherits Window {
                         width: settings-area.width - 26px;
                         padding: 4px;
 
-                        // â”€â”€ Wide: two columns (7 / 5) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                        // ── Wide: two columns (7 / 5) ─────────────────────────
                         if settings-area.two-col : HorizontalLayout {
                             spacing: 32px; alignment: stretch;
                             VerticalLayout {
                                 horizontal-stretch: 7; spacing: 24px; alignment: start;
                                 AppearanceSettings { theme-changed(m) => { root.theme-changed(m); } }
                                 IntegrationsSettings { }
-                            }
-                            VerticalLayout {
-                                horizontal-stretch: 5; spacing: 24px; alignment: start;
-                                SystemControlSettings {
-                                    autostart: root.autostart; disable-mpo: root.disable-mpo; fps-cap: root.fps-cap;
-                                    shader-quality: root.shader-quality; vsync-mode: root.vsync-mode;
-                                    autostart-toggled(v) => { root.autostart = v; root.autostart-toggled(v); }
-                                    mpo-toggled(v) => { root.disable-mpo = v; root.mpo-toggled(v); }
-                                    fps-cap-changed(v) => { root.fps-cap = v; root.fps-cap-changed(v); }
-                                    shader-quality-changed(v) => { root.shader-quality = v; root.shader-quality-changed(v); }
-                                    vsync-changed(v) => { root.vsync-mode = v; root.vsync-changed(v); }
-                                }
-                                InteractivitySettings {
-                                    audio-sensitivity: root.audio-sensitivity;
-                                    mouse-mode: root.mouse-mode;
-                                    mouse-sensitivity: root.mouse-sensitivity;
-                                    audio-sensitivity-changed(v) => { root.audio-sensitivity = v; root.audio-sensitivity-changed(v); }
-                                    mouse-mode-changed(v) => { root.mouse-mode = v; root.mouse-mode-changed(v); }
-                                    mouse-sensitivity-changed(v) => { root.mouse-sensitivity = v; root.mouse-sensitivity-changed(v); }
-                                }
                                 UpdatesSettings {
                                     version-badge: root.update-version-badge;
                                     update-button-label: root.update-button-label;
@@ -3244,9 +3216,39 @@ export component AppWindow inherits Window {
                                     lib-update-clicked => { root.check-for-library-updates(); }
                                 }
                             }
+                            VerticalLayout {
+                                horizontal-stretch: 5; spacing: 24px; alignment: start;
+                                SystemControlSettings {
+                                    autostart: root.autostart; disable-mpo: root.disable-mpo; fps-cap: root.fps-cap;
+                                    shader-quality: root.shader-quality; vsync-mode: root.vsync-mode;
+                                    autostart-toggled(v) => { root.autostart = v; root.autostart-toggled(v); }
+                                    mpo-toggled(v) => { root.disable-mpo = v; root.mpo-toggled(v); }
+                                    fps-cap-changed(v) => { root.fps-cap = v; root.fps-cap-changed(v); }
+                                    shader-quality-changed(v) => { root.shader-quality = v; root.shader-quality-changed(v); }
+                                    vsync-changed(v) => { root.vsync-mode = v; root.vsync-changed(v); }
+                                }
+                                ScreensaverSettings {
+                                    screensaver-enabled: root.screensaver-enabled;
+                                    screensaver-wallpaper-name: root.screensaver-wallpaper-name;
+                                    screensaver-timeout-mins: root.screensaver-timeout-mins;
+                                    screensaver-secure: root.screensaver-secure;
+                                    screensaver-toggled(v) => { root.screensaver-enabled = v; root.screensaver-toggled(v); }
+                                    screensaver-timeout-changed(v) => { root.screensaver-timeout-mins = v; root.screensaver-timeout-changed(v); }
+                                    screensaver-secure-toggled(v) => { root.screensaver-secure = v; root.screensaver-secure-toggled(v); }
+                                    open-windows-settings => { root.open-screensaver-settings(); }
+                                }
+                                InteractivitySettings {
+                                    audio-sensitivity: root.audio-sensitivity;
+                                    mouse-mode: root.mouse-mode;
+                                    mouse-sensitivity: root.mouse-sensitivity;
+                                    audio-sensitivity-changed(v) => { root.audio-sensitivity = v; root.audio-sensitivity-changed(v); }
+                                    mouse-mode-changed(v) => { root.mouse-mode = v; root.mouse-mode-changed(v); }
+                                    mouse-sensitivity-changed(v) => { root.mouse-sensitivity = v; root.mouse-sensitivity-changed(v); }
+                                }
+                            }
                         }
 
-                        // â”€â”€ Narrow: single stacked column â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                        // ── Narrow: single stacked column ─────────────────────
                         if !settings-area.two-col : VerticalLayout {
                             spacing: 24px; alignment: start;
                             AppearanceSettings { theme-changed(m) => { root.theme-changed(m); } }
@@ -3258,6 +3260,16 @@ export component AppWindow inherits Window {
                                 fps-cap-changed(v) => { root.fps-cap = v; root.fps-cap-changed(v); }
                                 shader-quality-changed(v) => { root.shader-quality = v; root.shader-quality-changed(v); }
                                 vsync-changed(v) => { root.vsync-mode = v; root.vsync-changed(v); }
+                            }
+                            ScreensaverSettings {
+                                screensaver-enabled: root.screensaver-enabled;
+                                screensaver-wallpaper-name: root.screensaver-wallpaper-name;
+                                screensaver-timeout-mins: root.screensaver-timeout-mins;
+                                screensaver-secure: root.screensaver-secure;
+                                screensaver-toggled(v) => { root.screensaver-enabled = v; root.screensaver-toggled(v); }
+                                screensaver-timeout-changed(v) => { root.screensaver-timeout-mins = v; root.screensaver-timeout-changed(v); }
+                                screensaver-secure-toggled(v) => { root.screensaver-secure = v; root.screensaver-secure-toggled(v); }
+                                open-windows-settings => { root.open-screensaver-settings(); }
                             }
                             InteractivitySettings {
                                 audio-sensitivity: root.audio-sensitivity;
