@@ -725,15 +725,14 @@ impl Renderer {
                             if let Some(target) = binding.target.as_ref().and_then(|t| pipeline.targets.get(t)) {
                                 pass_uniforms.iChannelResolution[binding.channel as usize] = [target.size.0 as f32, target.size.1 as f32, 1.0, 0.0];
                             }
-                        } else if binding.binding_type == "audio" {
-                            if binding.channel < 4 {
+                        } else if binding.binding_type == "audio"
+                            && binding.channel < 4 {
                                 pass_uniforms.iChannelResolution[binding.channel as usize] =
                                     [audio::TEX_WIDTH as f32, audio::TEX_HEIGHT as f32, 1.0, 0.0];
                                 // Signal that this audio channel is "playing" (some
                                 // shaders gate their effect on iChannelTime > 0).
                                 pass_uniforms.iChannelTime[binding.channel as usize] = pass_uniforms.iTime;
                             }
-                        }
                     }
 
                     self.context.queue.write_buffer(&pass.uniform_buffer, 0, bytemuck::cast_slice(&[pass_uniforms]));
@@ -816,15 +815,14 @@ impl Renderer {
                             if let Some(target) = binding.target.as_ref().and_then(|t| pipeline.targets.get(t)) {
                                 pass_uniforms.iChannelResolution[binding.channel as usize] = [target.size.0 as f32, target.size.1 as f32, 1.0, 0.0];
                             }
-                        } else if binding.binding_type == "audio" {
-                            if binding.channel < 4 {
+                        } else if binding.binding_type == "audio"
+                            && binding.channel < 4 {
                                 pass_uniforms.iChannelResolution[binding.channel as usize] =
                                     [audio::TEX_WIDTH as f32, audio::TEX_HEIGHT as f32, 1.0, 0.0];
                                 // Signal that this audio channel is "playing" (some
                                 // shaders gate their effect on iChannelTime > 0).
                                 pass_uniforms.iChannelTime[binding.channel as usize] = pass_uniforms.iTime;
                             }
-                        }
                     }
 
                     self.context.queue.write_buffer(&image_pass.uniform_buffer, 0, bytemuck::cast_slice(&[pass_uniforms]));

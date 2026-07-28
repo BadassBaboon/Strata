@@ -258,7 +258,7 @@ impl WallpaperPipeline {
 
         // Load static textures
         let mut textures = HashMap::new();
-        for (_, pass_cfg) in &config.render_targets {
+        for pass_cfg in config.render_targets.values() {
             for binding in &pass_cfg.bindings {
                 if binding.binding_type == "texture" {
                     if let Some(ref path) = binding.path {

@@ -118,7 +118,7 @@ impl AudioEngine {
             Err(_) => return vec![0u8; (TEX_WIDTH * TEX_HEIGHT * 4) as usize], // poisoned → silence
         };
         let now = Instant::now();
-        let stale = s.last_compute.map_or(true, |t| now.duration_since(t) >= Duration::from_millis(12));
+        let stale = s.last_compute.is_none_or(|t| now.duration_since(t) >= Duration::from_millis(12));
         if stale {
             let gain = f32::from_bits(self.gain.load(Ordering::Relaxed));
             compute(&mut s, gain);

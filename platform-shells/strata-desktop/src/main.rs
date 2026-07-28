@@ -737,7 +737,7 @@ fn create_daemon_video_window(
 
     if let Ok(handle) = window.window_handle() {
         if let RawWindowHandle::Win32(hh) = handle.as_raw() {
-            let hwnd = hh.hwnd.get() as isize;
+            let hwnd = hh.hwnd.get();
             platform::windows::prepare_wallpaper_window(hwnd as _, x, y, w, h);
             window.set_visible(true);
             platform::windows::suppress_activation(hwnd as _);
@@ -983,7 +983,7 @@ fn spawn_wallpaper_windows(
                     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
                     if let Ok(handle) = w.window_handle() {
                         if let RawWindowHandle::Win32(h) = handle.as_raw() {
-                            let hwnd_val = h.hwnd.get() as isize;
+                            let hwnd_val = h.hwnd.get();
                             raw_hwnd = Some(hwnd_val);
                             log::info!(
                                 "Wallpaper HWND {:x} for monitor at ({},{}) {}x{}",
@@ -1103,7 +1103,7 @@ fn sync_wallpaper_windows(
         let state = app_state.read().unwrap();
         let span = state.span_monitors;
         let primary_has_shader = controller::primary_monitor(&state.monitors)
-            .map(|m| has_shader(m))
+            .map(&has_shader)
             .unwrap_or(false);
         state.monitors.iter()
             .filter(|m| if span { primary_has_shader } else { has_shader(m) })
@@ -1289,7 +1289,7 @@ fn set_mpo_elevated(disabled: bool) -> bool {
         sei.lpVerb = verb.as_ptr();
         sei.lpFile = exe_w.as_ptr();
         sei.lpParameters = params.as_ptr();
-        sei.nShow = SW_HIDE as i32;
+        sei.nShow = SW_HIDE;
         if ShellExecuteExW(&mut sei) == 0 || sei.hProcess == 0 {
             return false; // user declined UAC, or launch failed
         }
@@ -2611,7 +2611,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                     // visible - they can move it down later to reorder.
                     monitor.layers.insert(0, LayerInfo {
                         wallpaper_path: path,
-                        name: name,
+                        name,
                         opacity: 1.0,
                         resolution_scale: 1.0,
                         positioning: "Fill".to_string(),
@@ -3324,7 +3324,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             slint::winit_030::WinitWindowAccessor::on_winit_window_event(slint_win, move |_, event| {
                     match event {
                         winit::event::WindowEvent::Resized(size) => {
-                            let _ = command_tx_resized.send(EngineCommand::WindowResized(window_id, size.clone()));
+                            let _ = command_tx_resized.send(EngineCommand::WindowResized(window_id, *size));
                         }
                         winit::event::WindowEvent::CloseRequested => {
                             let _ = command_tx_closed.send(EngineCommand::WindowClosed(window_id));
@@ -3870,7 +3870,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                 .map(|s| {
                     let is_movie = |l: &controller::LayerInfo| video_dir.as_ref().is_some_and(|vd| l.wallpaper_path.starts_with(vd));
                     let active = s.monitors.iter().any(|m| m.layers.iter().any(|l| l.visible && !is_movie(l)));
-                    let movie = s.monitors.iter().any(|m| m.layers.iter().any(|l| is_movie(l)));
+                    let movie = s.monitors.iter().any(|m| m.layers.iter().any(&is_movie));
                     // Library group counts (shader / movie / parallax) for the group headers.
                     let mut c = [0i32; 3];
                     for w in &s.wallpapers {

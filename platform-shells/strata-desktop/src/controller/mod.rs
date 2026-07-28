@@ -273,11 +273,7 @@ pub fn official_owner_repo() -> Option<(String, String)> {
     // version is resolved from the repo's tags, not from this URL.
     let rest = if let Some(r) = url.split("/gh/").nth(1) {
         r
-    } else if let Some(r) = url.split("github.com/").nth(1) {
-        r
-    } else {
-        return None;
-    };
+    } else { url.split("github.com/").nth(1)? };
     let path = rest.split(['@', '#', '?']).next()?;
     let mut parts = path.trim_matches('/').splitn(3, '/');
     let owner = parts.next()?.to_string();
