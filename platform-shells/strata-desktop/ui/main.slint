@@ -716,34 +716,57 @@ component ScreensaverSettings inherits VerticalLayout {
     in property <string> screensaver-wallpaper-name;
     in property <int>    screensaver-timeout-mins;
     in property <bool>   screensaver-secure;
-    callback screensaver-toggled(bool);
     callback screensaver-timeout-changed(int);
     callback screensaver-secure-toggled(bool);
+    callback clear-screensaver();
     callback open-windows-settings();
 
     spacing: 16px;
     SectionLabel { icon: "moon"; text: "WINDOWS SCREENSAVER"; }
     SettingsPanel {
-        // Enable Screensaver
-        HorizontalLayout {
-            spacing: 16px;
-            VerticalLayout {
-                horizontal-stretch: 1; spacing: 4px;
-                Text { text: "Enable Windows Screensaver"; font-size: 15px; font-weight: 700; color: Theme.palette.text; }
-                Text { text: "Use Strata to automatically render your active screensaver when the system is idle."; font-size: 12px; color: Theme.palette.text-muted; }
-            }
-            VerticalLayout { alignment: center; Toggle { checked: root.screensaver-enabled; toggled(v) => { root.screensaver-toggled(v); } } }
-        }
-        Divider {}
         // Active Screensaver Wallpaper
         HorizontalLayout {
-            spacing: 16px;
+            spacing: 16px; alignment: space-between;
             VerticalLayout {
-                horizontal-stretch: 1; spacing: 4px;
-                Text { text: "Active Screensaver Wallpaper"; font-size: 15px; font-weight: 700; color: Theme.palette.text; }
+                horizontal-stretch: 1; spacing: 6px;
+                HorizontalLayout {
+                    spacing: 8px; alignment: start;
+                    Text { text: "Active Screensaver Wallpaper"; font-size: 15px; font-weight: 700; color: Theme.palette.text; vertical-alignment: center; }
+                    Rectangle {
+                        height: 20px; width: status-tag.preferred-width + 14px; border-radius: 5px;
+                        background: (root.screensaver-enabled && root.screensaver-wallpaper-name != "") ? #22c55e1a : #ef44441a;
+                        border-width: 1px;
+                        border-color: (root.screensaver-enabled && root.screensaver-wallpaper-name != "") ? #22c55e40 : #ef444440;
+                        status-tag := Text {
+                            text: (root.screensaver-enabled && root.screensaver-wallpaper-name != "") ? "ACTIVE" : "INACTIVE";
+                            color: (root.screensaver-enabled && root.screensaver-wallpaper-name != "") ? #22c55e : #ef4444;
+                            font-size: 9px; font-weight: 800; letter-spacing: 0.5px;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                    }
+                }
                 Text {
-                    text: root.screensaver-wallpaper-name != "" ? root.screensaver-wallpaper-name : "None (Select 'Screen Saver' from any wallpaper's 'Apply to' menu)";
-                    font-size: 12px; color: root.screensaver-wallpaper-name != "" ? Theme.palette.accent : Theme.palette.text-muted;
+                    text: (root.screensaver-enabled && root.screensaver-wallpaper-name != "")
+                        ? root.screensaver-wallpaper-name
+                        : "None (Select 'Screen Saver' from any wallpaper card's 'Apply to' menu)";
+                    font-size: 12px;
+                    font-weight: (root.screensaver-enabled && root.screensaver-wallpaper-name != "") ? 700 : 400;
+                    color: (root.screensaver-enabled && root.screensaver-wallpaper-name != "") ? Theme.palette.accent : Theme.palette.text-muted;
+                }
+            }
+            if root.screensaver-enabled && root.screensaver-wallpaper-name != "" : VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 32px; width: clear-btn-txt.preferred-width + 20px; border-radius: 8px;
+                    background: clear-ta.has-hover ? Theme.palette.danger.with-alpha(0.15) : Theme.palette.card-hover;
+                    border-width: 1px; border-color: clear-ta.has-hover ? Theme.palette.danger : Theme.palette.border;
+                    animate background { duration: 120ms; }
+                    clear-btn-txt := Text {
+                        text: "CLEAR"; color: clear-ta.has-hover ? Theme.palette.danger : Theme.palette.text-muted;
+                        font-size: 10px; font-weight: 800; letter-spacing: 1px;
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                    clear-ta := TouchArea { clicked => { root.clear-screensaver(); } mouse-cursor: pointer; }
                 }
             }
         }
@@ -2696,7 +2719,7 @@ export component AppWindow inherits Window {
     callback layer-remove-requested(int);
     callback apply-to-monitor(int, string);
     callback apply-to-screensaver(string);
-    callback screensaver-toggled(bool);
+    callback clear-screensaver();
     callback screensaver-timeout-changed(int);
     callback screensaver-secure-toggled(bool);
     callback open-screensaver-settings();
@@ -3232,7 +3255,7 @@ export component AppWindow inherits Window {
                                     screensaver-wallpaper-name: root.screensaver-wallpaper-name;
                                     screensaver-timeout-mins: root.screensaver-timeout-mins;
                                     screensaver-secure: root.screensaver-secure;
-                                    screensaver-toggled(v) => { root.screensaver-enabled = v; root.screensaver-toggled(v); }
+                                    clear-screensaver => { root.clear-screensaver(); }
                                     screensaver-timeout-changed(v) => { root.screensaver-timeout-mins = v; root.screensaver-timeout-changed(v); }
                                     screensaver-secure-toggled(v) => { root.screensaver-secure = v; root.screensaver-secure-toggled(v); }
                                     open-windows-settings => { root.open-screensaver-settings(); }
@@ -3266,7 +3289,7 @@ export component AppWindow inherits Window {
                                 screensaver-wallpaper-name: root.screensaver-wallpaper-name;
                                 screensaver-timeout-mins: root.screensaver-timeout-mins;
                                 screensaver-secure: root.screensaver-secure;
-                                screensaver-toggled(v) => { root.screensaver-enabled = v; root.screensaver-toggled(v); }
+                                clear-screensaver => { root.clear-screensaver(); }
                                 screensaver-timeout-changed(v) => { root.screensaver-timeout-mins = v; root.screensaver-timeout-changed(v); }
                                 screensaver-secure-toggled(v) => { root.screensaver-secure = v; root.screensaver-secure-toggled(v); }
                                 open-windows-settings => { root.open-screensaver-settings(); }
@@ -3298,27 +3321,6 @@ export component AppWindow inherits Window {
             }
 
             // â•گâ•گ Diagnostics tab â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
-            // == Screensaver tab ===============================================
-            if root.active-tab == "screensaver" : screensaver-area := Rectangle {
-                vertical-stretch: 1;
-                ScrollView {
-                    VerticalLayout {
-                        width: screensaver-area.width - 26px;
-                        padding: 4px;
-                        ScreensaverSettings {
-                            screensaver-enabled: root.screensaver-enabled;
-                            screensaver-wallpaper-name: root.screensaver-wallpaper-name;
-                            screensaver-timeout-mins: root.screensaver-timeout-mins;
-                            screensaver-secure: root.screensaver-secure;
-                            screensaver-toggled(v) => { root.screensaver-enabled = v; root.screensaver-toggled(v); }
-                            screensaver-timeout-changed(v) => { root.screensaver-timeout-mins = v; root.screensaver-timeout-changed(v); }
-                            screensaver-secure-toggled(v) => { root.screensaver-secure = v; root.screensaver-secure-toggled(v); }
-                            open-windows-settings => { root.open-screensaver-settings(); }
-                        }
-                    }
-                }
-            }
-
             // == Diagnostics tab ===============================================
             if root.active-tab == "diagnostics" : diag-area := Rectangle {
                 vertical-stretch: 1;

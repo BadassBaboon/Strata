@@ -1497,6 +1497,13 @@ fn sort_entries(entries: &mut [controller::WallpaperEntry], sort_mode: &str) {
 
 /// Build the Library's Slint card list from already-ordered entries (call `sort_entries`
 /// on `state.wallpapers` first). Centralised so every rebuild stays consistent.
+fn same_path(p: &std::path::Path, str_path: &str) -> bool {
+    if str_path.is_empty() { return false; }
+    let p1 = p.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let p2 = str_path.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    p1 == p2
+}
+
 fn build_library_items(
     wallpapers: &[controller::WallpaperEntry],
     monitors: &[controller::MonitorInfo],
@@ -1516,7 +1523,7 @@ fn build_library_items(
         item.is_imported = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Imported"))
             || controller::is_user_deletable(&w.path);
         item.is_video = w.tags.iter().any(|t| t.eq_ignore_ascii_case("video"));
-        item.is_screensaver = !screensaver_path.is_empty() && w.path.to_string_lossy() == screensaver_path;
+        item.is_screensaver = same_path(&w.path, screensaver_path);
         item.visible = true;
         if let Some(ref thumb) = w.thumbnail {
             if let Ok(slint_img) = Image::load_from_path(thumb) {
@@ -1763,13 +1770,13 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
     ui.set_screensaver_secure(config.screensaver_secure);
     let initial_ss_name = if !config.screensaver_wallpaper_path.is_empty() {
         let state = app_state.read().unwrap();
-        state.wallpapers.iter().find(|w| w.path.to_string_lossy() == config.screensaver_wallpaper_path).map(|w| w.name.clone()).unwrap_or_default()
+        state.wallpapers.iter().find(|w| same_path(&w.path, &config.screensaver_wallpaper_path)).map(|w| w.name.clone()).unwrap_or_default()
     } else {
         String::new()
     };
     ui.set_screensaver_wallpaper_name(SharedString::from(&initial_ss_name));
     if open_screensaver_tab {
-        ui.set_active_tab(SharedString::from("screensaver"));
+        ui.set_active_tab(SharedString::from("settings"));
     }
 
     // Set up Monitors and Canvas
@@ -2838,12 +2845,12 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
             let mut cfg = config::Config::load();
             let wall_info = {
                 let state = app_state_ss.read().unwrap();
-                state.wallpapers.iter().find(|w| wall_name == w.name).map(|w| (w.path.clone(), w.name.clone()))
+                state.wallpapers.iter().find(|w| w.name.as_str() == wall_name.as_str()).map(|w| (w.path.clone(), w.name.clone()))
             };
 
             if let Some((path, name)) = wall_info {
                 let path_str = path.to_string_lossy().to_string();
-                if cfg.screensaver_wallpaper_path == path_str {
+                if same_path(&path, &cfg.screensaver_wallpaper_path) && cfg.screensaver_enabled {
                     cfg.screensaver_wallpaper_path = String::new();
                     cfg.screensaver_enabled = false;
                 } else {
@@ -2874,13 +2881,35 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
         });
     }
 
-    ui.on_screensaver_toggled(move |enabled| {
-        let mut cfg = config::Config::load();
-        cfg.screensaver_enabled = enabled;
-        cfg.save().ok();
-        #[cfg(target_os = "windows")]
-        platform::windows::sync_screensaver_registry(cfg.screensaver_enabled, cfg.screensaver_timeout_mins, cfg.screensaver_secure).ok();
-    });
+    {
+        let ui_clear_ss = ui.as_weak();
+        let app_state_clear_ss = app_state.clone();
+        let wallpapers_model_clear_ss = wallpapers_model.clone();
+        ui.on_clear_screensaver(move || {
+            let mut cfg = config::Config::load();
+            cfg.screensaver_wallpaper_path = String::new();
+            cfg.screensaver_enabled = false;
+            cfg.save().ok();
+
+            #[cfg(target_os = "windows")]
+            platform::windows::sync_screensaver_registry(
+                false,
+                cfg.screensaver_timeout_mins,
+                cfg.screensaver_secure,
+            ).ok();
+
+            if let Some(ui) = ui_clear_ss.upgrade() {
+                ui.set_screensaver_enabled(false);
+                ui.set_screensaver_wallpaper_path(SharedString::from(""));
+                ui.set_screensaver_wallpaper_name(SharedString::from(""));
+
+                if let Ok(state) = app_state_clear_ss.read() {
+                    let items = build_library_items(&state.wallpapers, &state.monitors, "");
+                    wallpapers_model_clear_ss.set_vec(items);
+                }
+            }
+        });
+    }
 
     ui.on_screensaver_timeout_changed(move |timeout| {
         let mut cfg = config::Config::load();
