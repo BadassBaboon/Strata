@@ -39,7 +39,9 @@ pub struct Config {
     // Library sort order: "default" | "name-asc" | "name-desc" | "date-newest" | "date-oldest".
     #[serde(default = "default_library_sort")]
     pub library_sort: String,
-    // Persisted collapse state of the library groups [shader, movie, parallax].
+    // Persisted collapse state of the library groups [active, shader, movie, parallax].
+    #[serde(default)]
+    pub group_collapsed_active: bool,
     #[serde(default)]
     pub group_collapsed_shader: bool,
     #[serde(default)]
@@ -139,6 +141,7 @@ impl Config {
             library_version: default_library_version(),
             last_update_check: 0,
             library_sort: default_library_sort(),
+            group_collapsed_active: false,
             group_collapsed_shader: false,
             group_collapsed_movie: false,
             group_collapsed_parallax: false,

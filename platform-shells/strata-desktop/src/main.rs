@@ -1504,6 +1504,19 @@ fn same_path(p: &std::path::Path, str_path: &str) -> bool {
     p1 == p2
 }
 
+fn update_library_group_counts(ui: &AppWindow, items: &[WallpaperItem]) {
+    let mut c = [0i32; 4];
+    for item in items {
+        if item.group >= 0 && (item.group as usize) < 4 {
+            c[item.group as usize] += 1;
+        }
+    }
+    ui.set_active_group_count(c[0]);
+    ui.set_shader_group_count(c[1]);
+    ui.set_movie_group_count(c[2]);
+    ui.set_parallax_group_count(c[3]);
+}
+
 fn build_library_items(
     wallpapers: &[controller::WallpaperEntry],
     monitors: &[controller::MonitorInfo],
@@ -1511,7 +1524,7 @@ fn build_library_items(
 ) -> Vec<WallpaperItem> {
     // Running per-group counters so each group's cards get a contiguous index (the grid
     // places by `group-index mod cols`, so columns fill correctly within each section).
-    let mut group_counter = [0i32; 3];
+    let mut group_counter = [0i32; 4];
     wallpapers.iter().map(|w| {
         let mut item = WallpaperItem::default();
         item.name = SharedString::from(&w.name);
@@ -1536,9 +1549,20 @@ fn build_library_items(
             .collect();
         item.is_active = counts.iter().any(|&c| c > 0);
         item.usage_counts = Rc::new(VecModel::from(counts)).into();
-        // Group: 0=shader (incl. imported), 1=movie, 2=parallax. group-index = position
-        // within that group (contiguous, in the current sort order).
-        let g = if item.is_video { 1 } else if item.is_parallax { 2 } else { 0 };
+        // Grouping:
+        // 0 = Active Live Wallpapers (if applied to any monitor or set as screensaver)
+        // 1 = Shader Wallpapers
+        // 2 = Movie Wallpapers
+        // 3 = Parallax Studio
+        let g = if item.is_active || item.is_screensaver {
+            0
+        } else if item.is_video {
+            2
+        } else if item.is_parallax {
+            3
+        } else {
+            1
+        };
         item.group = g;
         item.group_index = group_counter[g as usize];
         group_counter[g as usize] += 1;
@@ -1738,31 +1762,35 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
     let sort_mode = Rc::new(std::cell::RefCell::new(config.library_sort.clone()));
     ui.set_sort_mode(SharedString::from(config.library_sort.as_str()));
     // Restore the per-group collapse state, and persist it whenever a header is toggled.
+    ui.set_active_collapsed(config.group_collapsed_active);
     ui.set_shaders_collapsed(config.group_collapsed_shader);
     ui.set_movies_collapsed(config.group_collapsed_movie);
     ui.set_parallax_collapsed(config.group_collapsed_parallax);
     ui.on_group_collapsed_changed(move |group, collapsed| {
         let mut cfg = config::Config::load();
         match group {
-            1 => cfg.group_collapsed_movie = collapsed,
-            2 => cfg.group_collapsed_parallax = collapsed,
-            _ => cfg.group_collapsed_shader = collapsed,
+            0 => cfg.group_collapsed_active = collapsed,
+            1 => cfg.group_collapsed_shader = collapsed,
+            2 => cfg.group_collapsed_movie = collapsed,
+            3 => cfg.group_collapsed_parallax = collapsed,
+            _ => {}
         }
         cfg.save().ok();
     });
 
     // Set up Wallpaper Library: bundled library + user roots (parallax + imports).
-    let wallpapers_model = {
+    let initial_items = {
         let mut entries = controller::scan_all_wallpapers();
         sort_entries(&mut entries, &sort_mode.borrow());
         {
             let mut state = app_state.write().unwrap();
             state.wallpapers = entries.clone();
         }
-        // Snapshot monitors so each card shows its applied-monitor avatars on first paint.
         let monitor_snapshot = { app_state.read().unwrap().monitors.clone() };
-        Rc::new(VecModel::<WallpaperItem>::from(build_library_items(&entries, &monitor_snapshot, &config.screensaver_wallpaper_path)))
+        build_library_items(&entries, &monitor_snapshot, &config.screensaver_wallpaper_path)
     };
+    update_library_group_counts(&ui, &initial_items);
+    let wallpapers_model = Rc::new(VecModel::<WallpaperItem>::from(initial_items));
     ui.set_wallpapers(ModelRc::from(wallpapers_model.clone()));
     ui.set_screensaver_enabled(config.screensaver_enabled);
     ui.set_screensaver_wallpaper_path(SharedString::from(&config.screensaver_wallpaper_path));
@@ -2034,6 +2062,9 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
                     let slint_walls = build_library_items(&new_wallpapers, &monitors, &ss_path);
                     let dirs: Vec<std::path::PathBuf> = new_wallpapers.iter().map(|w| w.path.clone()).collect();
                     drop(state);
+                    if let Some(ui) = ui_handle_import.upgrade() {
+                        update_library_group_counts(&ui, &slint_walls);
+                    }
                     wallpapers_model_import.set_vec(slint_walls);
                     log::info!("Imported wallpaper from {:?}", path.file_name().unwrap());
                     push_toast_import("Wallpaper Imported", "Added to your library.", false);
@@ -2190,6 +2221,7 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
     let thumb_tx_refresh = thumb_tx.clone();
     let thumbnails_busy_refresh = thumbnails_busy.clone();
     let sort_mode_refresh = sort_mode.clone();
+    let ui_refresh = ui.as_weak();
     ui.on_refresh_library(move || {
         // Already refreshing? Don't rescan or kick off a second generator - just
         // tell the user. This stops rapid clicks from pinning the CPU.
@@ -2217,6 +2249,9 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
             let ss_path = config::Config::load().screensaver_wallpaper_path;
             let walls = build_library_items(&scanned, &monitors, &ss_path);
             drop(state);
+            if let Some(ui) = ui_refresh.upgrade() {
+                update_library_group_counts(&ui, &walls);
+            }
             wallpapers_model_refresh.set_vec(walls);
             log::info!("Library refreshed: {} wallpaper(s)", count);
             push_toast_refresh("Library Updated", &format!("Shader manifests synchronized - {} found.", count), false);
@@ -2245,8 +2280,11 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
             let monitors = state.monitors.clone();
             build_library_items(&state.wallpapers, &monitors, &cfg.screensaver_wallpaper_path)
         };
+        if let Some(ui) = ui_sort.upgrade() {
+            update_library_group_counts(&ui, &items);
+            ui.set_sort_mode(mode);
+        }
         wallpapers_model_sort.set_vec(items);
-        if let Some(ui) = ui_sort.upgrade() { ui.set_sort_mode(mode); }
     });
 
     // ── Delete a wallpaper (parallax assets get a trash button) ─────────────
@@ -2790,34 +2828,22 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
                     push_toast_apply("Shader Removed", &format!("{} removed from {}.", shader_name, mon_name), false);
                 }
 
-                // Update usage counts in the wallpaper model
-                let current_monitors = state.monitors.clone();
-                for (i, w) in state.wallpapers.iter().enumerate() {
-                    let mut item = wallpapers_model_apply.row_data(i).unwrap();
-                    let mut counts = Vec::new();
-                    for m in &current_monitors {
-                        counts.push(m.layers.iter().filter(|l| l.wallpaper_path == w.path).count() as i32);
-                    }
-                    item.is_active = counts.iter().any(|&c| c > 0);
-                    item.usage_counts = Rc::new(VecModel::from(counts)).into();
-                    wallpapers_model_apply.set_row_data(i, item);
-                }
-                
                 let mut config = config::Config::load();
                 config.update_from_state(state.theme_mode.clone(), state.span_monitors, state.autostart, &state.monitors);
                 config.save().ok();
+
+                let items = build_library_items(&state.wallpapers, &state.monitors, &config.screensaver_wallpaper_path);
+                if let Some(ui) = ui_handle_apply.upgrade() {
+                    update_library_group_counts(&ui, &items);
+                }
+                wallpapers_model_apply.set_vec(items);
 
                 changed = true;
             }
         }
         } // drop the app_state write guard before reconciling windows
 
-        // Assigning the first shader to a monitor (or removing its last one)
-        // can create or destroy that monitor's window - reconcile rather than a
-        // plain Reload.  sync_wallpaper_windows re-reads app_state, so the guard
-        // above MUST be released first.
         if changed {
-            // Applying a movie may have turned span off - reflect that in the UI toggle.
             if let Some(ui) = ui_handle_apply.upgrade() {
                 let span = app_state_apply.read().map(|s| s.span_monitors).unwrap_or(false);
                 ui.set_span_monitors(span);
@@ -2829,9 +2855,6 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
                 store_apply.clone(),
                 pending_close_apply.clone(),
             );
-            // Creating the wallpaper window(s) does heavy GPU work on the shared device;
-            // force a full UI repaint so the software-rendered window never lingers stale
-            // (this is the "transparent UI after applying a parallax wallpaper" case).
             needs_repaint_apply.set(true);
         }
     });
@@ -2874,6 +2897,7 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
 
                     if let Ok(state) = app_state_ss.read() {
                         let items = build_library_items(&state.wallpapers, &state.monitors, &cfg.screensaver_wallpaper_path);
+                        update_library_group_counts(&ui, &items);
                         wallpapers_model_ss.set_vec(items);
                     }
                 }
@@ -2905,6 +2929,7 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
 
                 if let Ok(state) = app_state_clear_ss.read() {
                     let items = build_library_items(&state.wallpapers, &state.monitors, "");
+                    update_library_group_counts(&ui, &items);
                     wallpapers_model_clear_ss.set_vec(items);
                 }
             }
@@ -4107,23 +4132,28 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
                     let is_movie = |l: &controller::LayerInfo| video_dir.as_ref().is_some_and(|vd| l.wallpaper_path.starts_with(vd));
                     let active = s.monitors.iter().any(|m| m.layers.iter().any(|l| l.visible && !is_movie(l)));
                     let movie = s.monitors.iter().any(|m| m.layers.iter().any(&is_movie));
-                    // Library group counts (shader / movie / parallax) for the group headers.
-                    let mut c = [0i32; 3];
+                    // Library group counts (active / shader / movie / parallax) for the group headers.
+                    let cfg_ss_path = config::Config::load().screensaver_wallpaper_path;
+                    let mut c = [0i32; 4];
                     for w in &s.wallpapers {
-                        let g = if video_dir.as_ref().is_some_and(|vd| w.path.starts_with(vd)) { 1 }
-                                else if w.tags.iter().any(|t| t.eq_ignore_ascii_case("Parallax")) { 2 }
-                                else { 0 };
+                        let is_ss = same_path(&w.path, &cfg_ss_path);
+                        let is_active_mon = s.monitors.iter().any(|m| m.layers.iter().any(|l| l.wallpaper_path == w.path));
+                        let g = if is_active_mon || is_ss { 0 }
+                                else if video_dir.as_ref().is_some_and(|vd| w.path.starts_with(vd)) { 2 }
+                                else if w.tags.iter().any(|t| t.eq_ignore_ascii_case("Parallax")) { 3 }
+                                else { 1 };
                         c[g] += 1;
                     }
                     (active, movie, c)
                 })
-                .unwrap_or((false, false, [0, 0, 0]));
+                .unwrap_or((false, false, [0, 0, 0, 0]));
             ui.set_engine_active(engine_active);
             // Span is unavailable while a movie wallpaper is active (movies don't span).
             ui.set_span_disabled(any_movie);
-            ui.set_shader_group_count(group_counts[0]);
-            ui.set_movie_group_count(group_counts[1]);
-            ui.set_parallax_group_count(group_counts[2]);
+            ui.set_active_group_count(group_counts[0]);
+            ui.set_shader_group_count(group_counts[1]);
+            ui.set_movie_group_count(group_counts[2]);
+            ui.set_parallax_group_count(group_counts[3]);
 
             // ── Logs ──
             // Parse each "[LEVEL] message" line into a structured entry with a

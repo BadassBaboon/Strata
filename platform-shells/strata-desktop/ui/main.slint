@@ -1857,6 +1857,12 @@ component GroupSection inherits VerticalLayout {
             VerticalLayout { alignment: center;
                 Icon { name: root.collapsed ? "chevron-up" : "chevron-down"; size: 18px; color: Theme.palette.text-muted; }
             }
+            if root.group == 0 : VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 8px; height: 8px; border-radius: 4px; background: #22c55e;
+                }
+            }
             Text { text: root.title; color: Theme.palette.text; font-size: 14px; font-weight: 800;
                    letter-spacing: 0.5px; vertical-alignment: center; }
             Text { text: "(" + root.count + ")"; color: Theme.palette.text-muted; font-size: 13px; font-weight: 600;
@@ -2650,12 +2656,14 @@ export component AppWindow inherits Window {
     // Library sort order (see sort_entries in Rust). Menu next to Refresh.
     in-out property <string> sort-mode: "default";
     callback sort-changed(string);
-    // Library grouping into collapsible Shader / Movie / Parallax sections (always on).
-    // Collapse state per group is persisted via group-collapsed-changed (0/1/2).
+    // Library grouping into collapsible Active / Shader / Movie / Parallax sections.
+    // Collapse state per group is persisted via group-collapsed-changed (0/1/2/3).
+    in-out property <bool> active-collapsed: false;
     in-out property <bool> shaders-collapsed: false;
     in-out property <bool> movies-collapsed: false;
     in-out property <bool> parallax-collapsed: false;
     callback group-collapsed-changed(int, bool);
+    in property <int> active-group-count: 0;
     in property <int> shader-group-count: 0;
     in property <int> movie-group-count: 0;
     in property <int> parallax-group-count: 0;
@@ -3012,35 +3020,49 @@ export component AppWindow inherits Window {
                             // (always on - it's the better browsing experience).
                             if root.wallpapers.length > 0 : VerticalLayout {
                                 spacing: 0;
+                                if root.active-group-count > 0 : GroupSection {
+                                    wallpapers: root.wallpapers; monitors: root.monitors;
+                                    title: "Active Live Wallpapers"; count: root.active-group-count; group: 0;
+                                    cols: grid-area.cols; lanes: grid-area.lanes; col-width: grid-area.col-width;
+                                    collapsed <=> root.active-collapsed;
+                                    open-url(u) => { root.open-url(u); }
+                                    apply-to-monitor(idx, n) => { root.apply-to-monitor(idx, n); }
+                                    apply-to-screensaver(n) => { root.apply-to-screensaver(n); }
+                                    delete-requested(i) => { root.wallpaper-delete-requested(i); }
+                                    toggled(c) => { root.group-collapsed-changed(0, c); }
+                                }
                                 if root.shader-group-count > 0 : GroupSection {
                                     wallpapers: root.wallpapers; monitors: root.monitors;
-                                    title: "Shader Wallpapers"; count: root.shader-group-count; group: 0;
+                                    title: "Shader Wallpapers"; count: root.shader-group-count; group: 1;
                                     cols: grid-area.cols; lanes: grid-area.lanes; col-width: grid-area.col-width;
                                     collapsed <=> root.shaders-collapsed;
                                     open-url(u) => { root.open-url(u); }
                                     apply-to-monitor(idx, n) => { root.apply-to-monitor(idx, n); }
+                                    apply-to-screensaver(n) => { root.apply-to-screensaver(n); }
                                     delete-requested(i) => { root.wallpaper-delete-requested(i); }
-                                    toggled(c) => { root.group-collapsed-changed(0, c); }
+                                    toggled(c) => { root.group-collapsed-changed(1, c); }
                                 }
                                 if root.movie-group-count > 0 : GroupSection {
                                     wallpapers: root.wallpapers; monitors: root.monitors;
-                                    title: "Movie Wallpapers"; count: root.movie-group-count; group: 1;
+                                    title: "Movie Wallpapers"; count: root.movie-group-count; group: 2;
                                     cols: grid-area.cols; lanes: grid-area.lanes; col-width: grid-area.col-width;
                                     collapsed <=> root.movies-collapsed;
                                     open-url(u) => { root.open-url(u); }
                                     apply-to-monitor(idx, n) => { root.apply-to-monitor(idx, n); }
+                                    apply-to-screensaver(n) => { root.apply-to-screensaver(n); }
                                     delete-requested(i) => { root.wallpaper-delete-requested(i); }
-                                    toggled(c) => { root.group-collapsed-changed(1, c); }
+                                    toggled(c) => { root.group-collapsed-changed(2, c); }
                                 }
                                 if root.parallax-group-count > 0 : GroupSection {
                                     wallpapers: root.wallpapers; monitors: root.monitors;
-                                    title: "Parallax Studio"; count: root.parallax-group-count; group: 2;
+                                    title: "Parallax Studio"; count: root.parallax-group-count; group: 3;
                                     cols: grid-area.cols; lanes: grid-area.lanes; col-width: grid-area.col-width;
                                     collapsed <=> root.parallax-collapsed;
                                     open-url(u) => { root.open-url(u); }
                                     apply-to-monitor(idx, n) => { root.apply-to-monitor(idx, n); }
+                                    apply-to-screensaver(n) => { root.apply-to-screensaver(n); }
                                     delete-requested(i) => { root.wallpaper-delete-requested(i); }
-                                    toggled(c) => { root.group-collapsed-changed(2, c); }
+                                    toggled(c) => { root.group-collapsed-changed(3, c); }
                                 }
                             }
                             if root.wallpapers.length == 0 : VerticalLayout {
