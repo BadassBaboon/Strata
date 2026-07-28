@@ -363,9 +363,12 @@ pub fn sync_screensaver_registry(enabled: bool, timeout_mins: u32, secure: bool)
         if let (Some(user_data), Ok(exe_path)) = (crate::controller::user_data_dir(), std::env::current_exe()) {
             let scr_path = user_data.join("Strata.scr");
             let should_copy = !scr_path.exists() || {
-                let m1 = std::fs::metadata(&exe_path).and_then(|m| m.modified()).ok();
-                let m2 = std::fs::metadata(&scr_path).and_then(|m| m.modified()).ok();
-                m1 != m2
+                let m_exe = std::fs::metadata(&exe_path).ok();
+                let m_scr = std::fs::metadata(&scr_path).ok();
+                match (m_exe, m_scr) {
+                    (Some(e), Some(s)) => e.len() != s.len() || e.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH) > s.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                    _ => true,
+                }
             };
             if should_copy {
                 if let Err(e) = std::fs::copy(&exe_path, &scr_path) {

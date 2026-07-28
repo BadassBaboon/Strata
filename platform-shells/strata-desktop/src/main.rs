@@ -197,17 +197,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // We also detect execution directly as a `.scr` file with no args (double-click
     // in Explorer), which Windows also treats as a screensaver run.
     let raw_args: Vec<String> = std::env::args().collect();
-    let is_ss_run = raw_args.iter().any(|a| a.eq_ignore_ascii_case("/s") || a.starts_with("/s:") || a.starts_with("/S:"));
-    let is_ss_config = raw_args.iter().any(|a| a.eq_ignore_ascii_case("/c") || a.starts_with("/c:") || a.starts_with("/C:"));
-    let is_ss_preview = raw_args.iter().any(|a| a.eq_ignore_ascii_case("/p") || a.starts_with("/p:") || a.starts_with("/P:"));
+    let is_ss_run = raw_args.iter().any(|a| {
+        let l = a.to_lowercase();
+        l == "/s" || l.starts_with("/s:") || l.starts_with("/s ") || l.starts_with("-s")
+    });
+    let is_ss_config = raw_args.iter().any(|a| {
+        let l = a.to_lowercase();
+        l == "/c" || l.starts_with("/c:") || l.starts_with("/c ") || l.starts_with("-c")
+    });
+    let is_ss_preview = raw_args.iter().any(|a| {
+        let l = a.to_lowercase();
+        l == "/p" || l.starts_with("/p:") || l.starts_with("/p ") || l.starts_with("-p")
+    });
 
     let is_scr_file = std::env::current_exe()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase().ends_with(".scr")))
         .unwrap_or(false);
 
-    if is_ss_run || is_ss_preview || (is_scr_file && !is_ss_config) {
-        return run_screensaver_mode(is_ss_preview);
+    if is_ss_run {
+        return run_screensaver_mode();
+    }
+
+    if is_ss_preview {
+        // Windows Control Panel (desk.cpl) passes `/p <HWND>` to request an embedded
+        // mini-preview inside the Control Panel dialog. Return Ok(()) so opening Control
+        // Panel does not spawn full-screen windows.
+        return Ok(());
     }
 
     // Register the shared asset roots so shaders resolve textures/cubemaps by name
@@ -243,11 +259,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::init();
         run_cli_mode(wallpaper_path)
     } else {
-        run_ui_mode(args.minimized, is_ss_config)
+        run_ui_mode(args.minimized, is_ss_config || is_scr_file)
     }
 }
 
-fn run_screensaver_mode(is_preview_mode: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
     use winit::application::ApplicationHandler;
     use winit::event::WindowEvent;
     use winit::event_loop::EventLoop;
@@ -259,7 +275,7 @@ fn run_screensaver_mode(is_preview_mode: bool) -> Result<(), Box<dyn std::error:
     let logger = SlintLogger { sender: log_tx, file: std::sync::Mutex::new(open_log_file()) };
     let _ = log::set_boxed_logger(Box::new(logger));
     log::set_max_level(log::LevelFilter::Info);
-    log::info!("=== Starting Strata Screensaver mode (preview={}) ===", is_preview_mode);
+    log::info!("=== Starting Strata Screensaver mode ===");
     log::info!("Screensaver CWD: {:?}", std::env::current_dir().unwrap_or_default());
     log::info!("Screensaver exe: {:?}", std::env::current_exe().unwrap_or_default());
     log::info!("Screensaver args: {:?}", std::env::args().collect::<Vec<_>>());
@@ -296,7 +312,6 @@ fn run_screensaver_mode(is_preview_mode: bool) -> Result<(), Box<dyn std::error:
         rt: tokio::runtime::Runtime,
         initial_cursor: Option<(f64, f64)>,
         start_time: std::time::Instant,
-        is_preview_mode: bool,
     }
 
     impl ApplicationHandler for ScreensaverApp {
@@ -334,16 +349,15 @@ fn run_screensaver_mode(is_preview_mode: bool) -> Result<(), Box<dyn std::error:
 
         fn window_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, _id: winit::window::WindowId, event: WindowEvent) {
             let elapsed_ms = self.start_time.elapsed().as_millis();
-            let is_preview = self.is_preview_mode;
             match event {
                 WindowEvent::CursorMoved { position, .. } => {
-                    if self.initial_cursor.is_none() || elapsed_ms < 1500 {
+                    if self.initial_cursor.is_none() {
                         self.initial_cursor = Some((position.x, position.y));
-                    } else if !is_preview {
+                    } else if elapsed_ms > 300 {
                         if let Some((init_x, init_y)) = self.initial_cursor {
                             let dx = (position.x - init_x).abs();
                             let dy = (position.y - init_y).abs();
-                            if dx > 40.0 || dy > 40.0 {
+                            if dx > 10.0 || dy > 10.0 {
                                 log::info!("Screensaver exiting due to mouse movement (dx={:.1}, dy={:.1})", dx, dy);
                                 event_loop.exit();
                             }
@@ -351,13 +365,13 @@ fn run_screensaver_mode(is_preview_mode: bool) -> Result<(), Box<dyn std::error:
                     }
                 }
                 WindowEvent::MouseInput { state: winit::event::ElementState::Pressed, .. } => {
-                    if elapsed_ms > 1500 && !is_preview {
+                    if elapsed_ms > 300 {
                         log::info!("Screensaver exiting due to mouse button click");
                         event_loop.exit();
                     }
                 }
                 WindowEvent::KeyboardInput { event: kb_event, .. } => {
-                    if kb_event.state == winit::event::ElementState::Pressed && elapsed_ms > 500 && !is_preview {
+                    if kb_event.state == winit::event::ElementState::Pressed && elapsed_ms > 200 {
                         log::info!("Screensaver exiting due to keyboard input");
                         event_loop.exit();
                     }
@@ -391,10 +405,12 @@ fn run_screensaver_mode(is_preview_mode: bool) -> Result<(), Box<dyn std::error:
         rt: tokio::runtime::Runtime::new()?,
         initial_cursor: None,
         start_time: std::time::Instant::now(),
-        is_preview_mode,
     };
-    event_loop.run_app(&mut app)?;
-    Ok(())
+    let _res = event_loop.run_app(&mut app);
+    app.renderers.clear();
+    app.windows.clear();
+    log::info!("Screensaver closed cleanly.");
+    std::process::exit(0);
 }
 
 /// Sanitize a string into a safe folder name (alphanumerics, space, dash, underscore).
@@ -1853,9 +1869,18 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
     // Safety check: ensure Strata.scr exists in AppData if screensaver is enabled
     if config.screensaver_enabled {
         if let Some(user_data) = controller::user_data_dir() {
+            let _ = std::fs::create_dir_all(&user_data);
             let scr_path = user_data.join("Strata.scr");
-            if !scr_path.exists() {
-                if let Ok(exe_path) = std::env::current_exe() {
+            if let Ok(exe_path) = std::env::current_exe() {
+                let should_copy = !scr_path.exists() || {
+                    let m_exe = std::fs::metadata(&exe_path).ok();
+                    let m_scr = std::fs::metadata(&scr_path).ok();
+                    match (m_exe, m_scr) {
+                        (Some(e), Some(s)) => e.len() != s.len() || e.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH) > s.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                        _ => true,
+                    }
+                };
+                if should_copy {
                     if std::fs::copy(&exe_path, &scr_path).is_err() && !scr_path.exists() {
                         log::warn!("Strata.scr missing and could not be created; disabling screensaver.");
                         config.screensaver_enabled = false;
