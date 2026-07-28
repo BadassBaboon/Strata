@@ -86,7 +86,7 @@ pub fn restore_window_placement(hwnd: isize) -> bool {
 #[cfg(target_os = "windows")]
 pub fn get_wallpaper_window() -> Option<HWND> {
     unsafe {
-        let progman = FindWindowExA(0, 0, b"Progman\0".as_ptr(), ptr::null());
+        let progman = FindWindowExA(0, 0, c"Progman".as_ptr().cast(), ptr::null());
         if progman == 0 {
             log::error!("WorkerW search: Progman not found - cannot enable wallpaper mode");
             return None;
@@ -110,9 +110,9 @@ pub fn get_wallpaper_window() -> Option<HWND> {
         {
             let mut workerw: HWND = 0;
             unsafe extern "system" fn s1(hwnd: HWND, lp: LPARAM) -> BOOL {
-                let p = FindWindowExA(hwnd, 0, b"SHELLDLL_DefView\0".as_ptr(), ptr::null());
+                let p = FindWindowExA(hwnd, 0, c"SHELLDLL_DefView".as_ptr().cast(), ptr::null());
                 if p != 0 {
-                    *(lp as *mut HWND) = FindWindowExA(0, hwnd, b"WorkerW\0".as_ptr(), ptr::null());
+                    *(lp as *mut HWND) = FindWindowExA(0, hwnd, c"WorkerW".as_ptr().cast(), ptr::null());
                     return 0;
                 }
                 1
@@ -129,7 +129,7 @@ pub fn get_wallpaper_window() -> Option<HWND> {
 
         // ── Strategy 2 ── WorkerW directly below Progman in Z-order
         {
-            let ww = FindWindowExA(0, progman, b"WorkerW\0".as_ptr(), ptr::null());
+            let ww = FindWindowExA(0, progman, c"WorkerW".as_ptr().cast(), ptr::null());
             if ww != 0 {
                 if let Some((w, h)) = large_enough(ww) {
                     log::info!("WorkerW: strategy 2 (below Progman) → {:x} ({}×{})", ww, w, h);
@@ -142,12 +142,12 @@ pub fn get_wallpaper_window() -> Option<HWND> {
         // ── Strategy 3 ── Enumerate ALL top-level WorkerW windows, filter by size.
         {
             let mut candidates: Vec<(HWND, i32, i32)> = Vec::new();
-            let mut hw = FindWindowExA(0, 0, b"WorkerW\0".as_ptr(), ptr::null());
+            let mut hw = FindWindowExA(0, 0, c"WorkerW".as_ptr().cast(), ptr::null());
             while hw != 0 {
                 let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
                 GetWindowRect(hw, &mut r);
                 candidates.push((hw, r.right - r.left, r.bottom - r.top));
-                hw = FindWindowExA(0, hw, b"WorkerW\0".as_ptr(), ptr::null());
+                hw = FindWindowExA(0, hw, c"WorkerW".as_ptr().cast(), ptr::null());
             }
             log::info!(
                 "WorkerW: {} top-level WorkerW handles: [{}]",
@@ -177,7 +177,7 @@ pub fn get_wallpaper_window() -> Option<HWND> {
 
         // ── Strategy 4 ── WorkerW as a direct child of Progman (some Win11 builds)
         {
-            let ww = FindWindowExA(progman, 0, b"WorkerW\0".as_ptr(), ptr::null());
+            let ww = FindWindowExA(progman, 0, c"WorkerW".as_ptr().cast(), ptr::null());
             if ww != 0 {
                 let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
                 GetWindowRect(ww, &mut r);
@@ -354,7 +354,7 @@ pub fn sync_screensaver_registry(enabled: bool, timeout_mins: u32, secure: bool)
 
     unsafe {
         let mut key: windows_sys::Win32::System::Registry::HKEY = 0;
-        let res = RegOpenKeyExA(HKEY_CURRENT_USER, b"Control Panel\\Desktop\0".as_ptr(), 0, KEY_SET_VALUE, &mut key);
+        let res = RegOpenKeyExA(HKEY_CURRENT_USER, c"Control Panel\\Desktop".as_ptr().cast(), 0, KEY_SET_VALUE, &mut key);
         if res != 0 {
             return Err(format!("Failed to open Windows Registry Desktop key: error {}", res));
         }
@@ -372,20 +372,20 @@ pub fn sync_screensaver_registry(enabled: bool, timeout_mins: u32, secure: bool)
             if enabled {
                 let path_str = scr_path.to_string_lossy();
                 let path_bytes = format!("{}\0", path_str);
-                RegSetValueExA(key, b"SCRNSAVE.EXE\0".as_ptr(), 0, REG_SZ, path_bytes.as_ptr(), path_bytes.len() as u32);
+                RegSetValueExA(key, c"SCRNSAVE.EXE".as_ptr().cast(), 0, REG_SZ, path_bytes.as_ptr(), path_bytes.len() as u32);
             }
         }
 
-        let active_val = if enabled { b"1\0".as_ptr() } else { b"0\0".as_ptr() };
-        RegSetValueExA(key, b"ScreenSaveActive\0".as_ptr(), 0, REG_SZ, active_val, 2);
+        let active_val = if enabled { c"1".as_ptr().cast() } else { c"0".as_ptr().cast() };
+        RegSetValueExA(key, c"ScreenSaveActive".as_ptr().cast(), 0, REG_SZ, active_val, 2);
 
         let timeout_sec = timeout_mins.max(1) * 60;
         let timeout_str = timeout_sec.to_string();
         let timeout_bytes = format!("{}\0", timeout_str);
-        RegSetValueExA(key, b"ScreenSaveTimeOut\0".as_ptr(), 0, REG_SZ, timeout_bytes.as_ptr(), timeout_bytes.len() as u32);
+        RegSetValueExA(key, c"ScreenSaveTimeOut".as_ptr().cast(), 0, REG_SZ, timeout_bytes.as_ptr(), timeout_bytes.len() as u32);
 
-        let secure_val = if secure { b"1\0".as_ptr() } else { b"0\0".as_ptr() };
-        RegSetValueExA(key, b"ScreenSaverIsSecure\0".as_ptr(), 0, REG_SZ, secure_val, 2);
+        let secure_val = if secure { c"1".as_ptr().cast() } else { c"0".as_ptr().cast() };
+        RegSetValueExA(key, c"ScreenSaverIsSecure".as_ptr().cast(), 0, REG_SZ, secure_val, 2);
 
         RegCloseKey(key);
 

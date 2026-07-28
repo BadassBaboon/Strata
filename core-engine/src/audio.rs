@@ -160,8 +160,8 @@ fn compute(s: &mut Shared, gain: f32) {
     let bins = TEX_WIDTH as usize; // 512, = n/2
     let row_stride = (TEX_WIDTH * 4) as usize;
     // ── Row 0: FFT magnitudes (log-scaled, smoothed) ──
-    for i in 0..bins {
-        let mag = buf[i].norm() / (n as f32);
+    for (i, c) in buf.iter().enumerate().take(bins) {
+        let mag = c.norm() / (n as f32);
         let db = 20.0 * (mag + 1e-6).log10();
         // Match the WebAudio AnalyserNode mapping Shadertoy uses: dB in
         // [minDecibels=-100, maxDecibels=-30] → [0,1]. This is much "hotter" than

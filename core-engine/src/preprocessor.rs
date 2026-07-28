@@ -89,18 +89,18 @@ layout(std140, set = 0, binding = 0) uniform GlobalUniforms {
 
 "#,
     );
-    for ch in 0..4 {
+    for (ch, &is_cube) in cube_channels.iter().enumerate() {
         let tex_binding = ch * 2;
         let smp_binding = ch * 2 + 1;
-        let tex_type = if cube_channels[ch] { "textureCube" } else { "texture2D" };
+        let tex_type = if is_cube { "textureCube" } else { "texture2D" };
         header.push_str(&format!(
             "layout(set = 1, binding = {tex_binding}) uniform {tex_type} iChannel{ch}_tex;\n\
              layout(set = 1, binding = {smp_binding}) uniform sampler iChannel{ch}_sampler;\n"
         ));
     }
     header.push('\n');
-    for ch in 0..4 {
-        let smp_type = if cube_channels[ch] { "samplerCube" } else { "sampler2D" };
+    for (ch, &is_cube) in cube_channels.iter().enumerate() {
+        let smp_type = if is_cube { "samplerCube" } else { "sampler2D" };
         header.push_str(&format!(
             "#define iChannel{ch} {smp_type}(iChannel{ch}_tex, iChannel{ch}_sampler)\n"
         ));

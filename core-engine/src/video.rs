@@ -11,7 +11,7 @@
 ///
 /// * `y`  - full-resolution luma plane, `width * height` bytes, tightly packed.
 /// * `uv` - half-resolution interleaved chroma plane, `width * (height/2)` bytes
-///          (`U,V,U,V…`), tightly packed.
+///   (`U,V,U,V…`), tightly packed.
 pub struct VideoFrame {
     pub width: u32,
     pub height: u32,

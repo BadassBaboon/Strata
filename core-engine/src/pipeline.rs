@@ -592,14 +592,14 @@ void main() {
     /// `samplerCube` the preprocessor emits for them.
     fn channel_layout_for(device: &wgpu::Device, cube_channels: [bool; 4]) -> wgpu::BindGroupLayout {
         let mut entries = Vec::with_capacity(8);
-        for i in 0..4 {
+        for (i, &is_cube) in cube_channels.iter().enumerate() {
             let binding_idx = i as u32 * 2;
             entries.push(wgpu::BindGroupLayoutEntry {
                 binding: binding_idx,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: if cube_channels[i] {
+                    view_dimension: if is_cube {
                         wgpu::TextureViewDimension::Cube
                     } else {
                         wgpu::TextureViewDimension::D2

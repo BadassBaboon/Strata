@@ -50,8 +50,8 @@ pub fn otsu_threshold(depth: &GrayImage) -> f32 {
     let total = depth.pixels().len() as f64;
     let sum: f64 = (0..256).map(|i| i as f64 * hist[i] as f64).sum();
     let (mut sum_b, mut w_b, mut best_var, mut thr) = (0.0f64, 0.0f64, 0.0f64, 128usize);
-    for i in 0..256 {
-        w_b += hist[i] as f64;
+    for (i, &count) in hist.iter().enumerate() {
+        w_b += count as f64;
         if w_b == 0.0 {
             continue;
         }
@@ -59,7 +59,7 @@ pub fn otsu_threshold(depth: &GrayImage) -> f32 {
         if w_f <= 0.0 {
             break;
         }
-        sum_b += i as f64 * hist[i] as f64;
+        sum_b += i as f64 * count as f64;
         let m_b = sum_b / w_b;
         let m_f = (sum - sum_b) / w_f;
         let between = w_b * w_f * (m_b - m_f) * (m_b - m_f);
