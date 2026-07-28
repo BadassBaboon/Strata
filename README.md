@@ -11,15 +11,16 @@ Strata runs animated, interactive wallpapers directly on your computer's graphic
 ## Features
 
 * **Shadertoy compatibility:** Runs standard Shadertoy animations natively.
+* **Native Screensaver Mode:** Use any live wallpaper as a native OS screensaver with configurable idle timeouts (1–60 minutes), optional password protection on resume, and automatic background wallpaper pausing.
+* **Full-Screen Game Auto-Pause:** Automatically detects full-screen games, heavy applications, and video playback to pause wallpaper rendering instantly, freeing 100% GPU/CPU power for performance.
 * **Audio-reactive wallpapers:** Wallpapers react to your system audio. The engine captures audio only when a reactive wallpaper is active.
 * **Mouse interaction:** Wallpapers react to your cursor. You can apply this to all wallpapers, specific ones, or turn it off entirely.
-* **Parallax Studio:** Converts 2D photos into 3D animated wallpapers that shift with your cursor. An on-device machine learning pipeline separates the subject from the background and fills in the gaps.
-* **Wallpaper import:** Import shaders exported from Shadertoy. The application converts them and generates thumbnails automatically.
-* **Multi-monitor support:** Assign different wallpapers to each monitor, or stretch one wallpaper across all screens. You can adjust the resolution scale for each layer from 0.25x to 1.0x.
+* **Parallax Studio:** Converts 2D photos into 3D animated wallpapers that shift with your cursor using an on-device machine learning depth estimation pipeline.
+* **Wallpaper import:** Import custom shaders exported from Shadertoy or video files (.mp4 and .webm). The application converts them and generates thumbnails automatically.
+* **Multi-monitor support:** Assign different wallpapers to each monitor or stretch one wallpaper across all screens with adjustable resolution scaling per layer (0.25x to 1.0x).
 * **Wallpaper library:** Browse, search, and filter your installed wallpapers.
-* **Movie-based wallpaper support:** Bring your favorite movie based wallpaper to Strata, you can import .mp4 and .webm and use them as your desktop wallpaper.
 * **Automatic updates:** Checks for engine and wallpaper library updates weekly.
-* **Native interface:** A lightweight user interface with dark and light themes, a system tray icon, and performance diagnostics.
+* **Native interface:** A lightweight user interface with dark and light themes, a system tray icon, and live performance diagnostics.
 
 ## Project goals
 
@@ -31,24 +32,16 @@ Strata runs animated, interactive wallpapers directly on your computer's graphic
 | Platform | Status |
 | :--- | :--- |
 | Windows | Supported |
-| Linux | Planned |
-| Android | Planned |
-| macOS | Planned |
-| iOS | Planned |
+| Linux | Planned (Wayland & X11 desktop integration) |
+| Android | Planned (Native wallpaper service package) |
+| macOS | Planned (Desktop spaces & menu bar integration) |
 
 ## To-do list
 
-- [ ] **Game auto-pause:** Pause wallpaper rendering when a full-screen game or heavy application is running.
 - [ ] **Daily wallpaper rotation:** Automatically change the active wallpaper each day from your library.
 - [ ] **Parallax auto-detect:** Automatically select the optimal quality setting for Parallax Studio based on your hardware.
 - [ ] **Translation support:** Add multiple language options to the interface.
-- [ ] **Screensaver mode:** Use the engine as a native screensaver.
-- [ ] **Distribution packaging:** Create a standard Windows installer.
 - [ ] **Spotify integration:** Display track information and album art inside active wallpapers.
-- [ ] **Linux support:** Add Wayland and X11 desktop integration.
-- [ ] **Android support:** Create a native Android wallpaper service package.
-- [ ] **macOS support:** Integrate with macOS desktop spaces and the menu bar.
-- [ ] **iOS support:** Build a compatible iOS application.
 
 ## License
 
