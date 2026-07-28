@@ -46,7 +46,20 @@ pub struct Config {
     pub group_collapsed_movie: bool,
     #[serde(default)]
     pub group_collapsed_parallax: bool,
+    #[serde(default)]
+    pub screensaver_enabled: bool,
+    #[serde(default)]
+    pub screensaver_wallpaper_path: String,
+    #[serde(default = "default_screensaver_timeout_mins")]
+    pub screensaver_timeout_mins: u32,
+    #[serde(default)]
+    pub screensaver_secure: bool,
     pub monitors: Vec<MonitorConfig>,
+}
+
+/// Default screensaver idle timeout in minutes.
+pub fn default_screensaver_timeout_mins() -> u32 {
+    10
 }
 
 /// Default library sort: bundled shaders A-Z with user content at the bottom.
@@ -129,6 +142,10 @@ impl Config {
             group_collapsed_shader: false,
             group_collapsed_movie: false,
             group_collapsed_parallax: false,
+            screensaver_enabled: false,
+            screensaver_wallpaper_path: String::new(),
+            screensaver_timeout_mins: default_screensaver_timeout_mins(),
+            screensaver_secure: false,
             monitors: Vec::new(),
         }
     }

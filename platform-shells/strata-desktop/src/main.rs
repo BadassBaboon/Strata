@@ -216,12 +216,126 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return run_video_daemon();
     }
 
+    let raw_args: Vec<String> = std::env::args().collect();
+    let is_ss_run = raw_args.iter().any(|a| a.eq_ignore_ascii_case("/s") || a.starts_with("/s:") || a.starts_with("/S:"));
+    let is_ss_config = raw_args.iter().any(|a| a.eq_ignore_ascii_case("/c") || a.starts_with("/c:") || a.starts_with("/C:"));
+    let is_ss_preview = raw_args.iter().any(|a| a.eq_ignore_ascii_case("/p") || a.starts_with("/p:") || a.starts_with("/P:"));
+
+    if is_ss_preview {
+        return Ok(());
+    }
+
+    if is_ss_run {
+        env_logger::init();
+        return run_screensaver_mode();
+    }
+
     if let Some(wallpaper_path) = args.cli {
         env_logger::init();
         run_cli_mode(wallpaper_path)
     } else {
-        run_ui_mode(args.minimized)
+        run_ui_mode(args.minimized, is_ss_config)
     }
+}
+
+fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::EventLoop;
+    use winit::window::Window;
+
+    let cfg = config::Config::load();
+    if cfg.screensaver_wallpaper_path.is_empty() {
+        return Ok(());
+    }
+    let ss_path = std::path::PathBuf::from(&cfg.screensaver_wallpaper_path);
+    if !ss_path.exists() {
+        return Ok(());
+    }
+
+    struct ScreensaverApp {
+        wallpaper_dir: std::path::PathBuf,
+        windows: Vec<Arc<Window>>,
+        renderers: Vec<core_engine::Renderer>,
+        context: Option<Arc<core_engine::GraphicsContext>>,
+        rt: tokio::runtime::Runtime,
+        initial_cursor: Option<(f64, f64)>,
+    }
+
+    impl ApplicationHandler for ScreensaverApp {
+        fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+            if !self.windows.is_empty() {
+                return;
+            }
+            let context = Arc::new(self.rt.block_on(core_engine::GraphicsContext::new()).unwrap());
+            self.context = Some(context.clone());
+
+            let monitors = controller::discover_monitors();
+            for mon in &monitors {
+                let attributes = Window::default_attributes()
+                    .with_title("Strata Screensaver")
+                    .with_inner_size(winit::dpi::PhysicalSize::new(mon.resolution.0, mon.resolution.1))
+                    .with_position(winit::dpi::PhysicalPosition::new(mon.position.0, mon.position.1))
+                    .with_decorations(false)
+                    .with_active(true);
+                if let Ok(window) = event_loop.create_window(attributes) {
+                    let win_arc = Arc::new(window);
+                    if let Ok(surface) = context.instance.create_surface(win_arc.clone()) {
+                        if let Ok(mut renderer) = core_engine::Renderer::new(context.clone(), win_arc.clone(), surface, win_arc.inner_size()) {
+                            let _ = renderer.add_layer(&self.wallpaper_dir, 1.0, 1.0, "Fill".to_string(), [0.0, 0.0, 1.0, 1.0], "normal".to_string());
+                            self.windows.push(win_arc);
+                            self.renderers.push(renderer);
+                        }
+                    }
+                }
+            }
+        }
+
+        fn window_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, _id: winit::window::WindowId, event: WindowEvent) {
+            match event {
+                WindowEvent::CursorMoved { position, .. } => {
+                    if let Some((init_x, init_y)) = self.initial_cursor {
+                        let dx = (position.x - init_x).abs();
+                        let dy = (position.y - init_y).abs();
+                        if dx > 10.0 || dy > 10.0 {
+                            event_loop.exit();
+                        }
+                    } else {
+                        self.initial_cursor = Some((position.x, position.y));
+                    }
+                }
+                WindowEvent::MouseInput { .. }
+                | WindowEvent::KeyboardInput { .. }
+                | WindowEvent::CloseRequested => {
+                    event_loop.exit();
+                }
+                WindowEvent::RedrawRequested => {
+                    for r in &mut self.renderers {
+                        let _ = r.render();
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+            for win in &self.windows {
+                win.request_redraw();
+            }
+        }
+    }
+
+    let event_loop = EventLoop::new()?;
+    let mut app = ScreensaverApp {
+        wallpaper_dir: ss_path,
+        windows: Vec::new(),
+        renderers: Vec::new(),
+        context: None,
+        rt: tokio::runtime::Runtime::new()?,
+        initial_cursor: None,
+    };
+    event_loop.run_app(&mut app)?;
+    Ok(())
 }
 
 /// Sanitize a string into a safe folder name (alphanumerics, space, dash, underscore).
@@ -1385,6 +1499,7 @@ fn sort_entries(entries: &mut [controller::WallpaperEntry], sort_mode: &str) {
 fn build_library_items(
     wallpapers: &[controller::WallpaperEntry],
     monitors: &[controller::MonitorInfo],
+    screensaver_path: &str,
 ) -> Vec<WallpaperItem> {
     // Running per-group counters so each group's cards get a contiguous index (the grid
     // places by `group-index mod cols`, so columns fill correctly within each section).
@@ -1400,6 +1515,7 @@ fn build_library_items(
         item.is_imported = w.tags.iter().any(|t| t.eq_ignore_ascii_case("Imported"))
             || controller::is_user_deletable(&w.path);
         item.is_video = w.tags.iter().any(|t| t.eq_ignore_ascii_case("video"));
+        item.is_screensaver = !screensaver_path.is_empty() && w.path.to_string_lossy() == screensaver_path;
         item.visible = true;
         if let Some(ref thumb) = w.thumbnail {
             if let Ok(slint_img) = Image::load_from_path(thumb) {
@@ -1422,7 +1538,7 @@ fn build_library_items(
     }).collect()
 }
 
-fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Enforce a single running instance - a second launch exits immediately instead
     // of spawning duplicate tray icons / wallpaper windows fighting over the desktop.
     if another_instance_running() {
@@ -1637,9 +1753,23 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         }
         // Snapshot monitors so each card shows its applied-monitor avatars on first paint.
         let monitor_snapshot = { app_state.read().unwrap().monitors.clone() };
-        Rc::new(VecModel::<WallpaperItem>::from(build_library_items(&entries, &monitor_snapshot)))
+        Rc::new(VecModel::<WallpaperItem>::from(build_library_items(&entries, &monitor_snapshot, &config.screensaver_wallpaper_path)))
     };
     ui.set_wallpapers(ModelRc::from(wallpapers_model.clone()));
+    ui.set_screensaver_enabled(config.screensaver_enabled);
+    ui.set_screensaver_wallpaper_path(SharedString::from(&config.screensaver_wallpaper_path));
+    ui.set_screensaver_timeout_mins(config.screensaver_timeout_mins as i32);
+    ui.set_screensaver_secure(config.screensaver_secure);
+    let initial_ss_name = if !config.screensaver_wallpaper_path.is_empty() {
+        let state = app_state.read().unwrap();
+        state.wallpapers.iter().find(|w| w.path.to_string_lossy() == config.screensaver_wallpaper_path).map(|w| w.name.clone()).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    ui.set_screensaver_wallpaper_name(SharedString::from(&initial_ss_name));
+    if open_screensaver_tab {
+        ui.set_active_tab(SharedString::from("screensaver"));
+    }
 
     // Set up Monitors and Canvas
     let monitors_model = Rc::new(VecModel::<MonitorItem>::from(Vec::new()));
@@ -1892,7 +2022,8 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
                     state.wallpapers = new_wallpapers.clone();
                     let monitors = state.monitors.clone();
 
-                    let slint_walls = build_library_items(&new_wallpapers, &monitors);
+                    let ss_path = config::Config::load().screensaver_wallpaper_path;
+                    let slint_walls = build_library_items(&new_wallpapers, &monitors, &ss_path);
                     let dirs: Vec<std::path::PathBuf> = new_wallpapers.iter().map(|w| w.path.clone()).collect();
                     drop(state);
                     wallpapers_model_import.set_vec(slint_walls);
@@ -2075,7 +2206,8 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
         if set_changed {
             state.wallpapers = scanned.clone();
             let monitors = state.monitors.clone();
-            let walls = build_library_items(&scanned, &monitors);
+            let ss_path = config::Config::load().screensaver_wallpaper_path;
+            let walls = build_library_items(&scanned, &monitors, &ss_path);
             drop(state);
             wallpapers_model_refresh.set_vec(walls);
             log::info!("Library refreshed: {} wallpaper(s)", count);
@@ -2103,7 +2235,7 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             let mut state = app_state_sort.write().unwrap();
             sort_entries(&mut state.wallpapers, &mode);
             let monitors = state.monitors.clone();
-            build_library_items(&state.wallpapers, &monitors)
+            build_library_items(&state.wallpapers, &monitors, &cfg.screensaver_wallpaper_path)
         };
         wallpapers_model_sort.set_vec(items);
         if let Some(ui) = ui_sort.upgrade() { ui.set_sort_mode(mode); }
@@ -2694,6 +2826,80 @@ fn run_ui_mode(start_minimized: bool) -> Result<(), Box<dyn std::error::Error>> 
             // (this is the "transparent UI after applying a parallax wallpaper" case).
             needs_repaint_apply.set(true);
         }
+    });
+
+    // ── Apply wallpaper to Screen Saver ─────────────────────────────────────
+    {
+        let ui_ss = ui.as_weak();
+        let app_state_ss = app_state.clone();
+        let wallpapers_model_ss = wallpapers_model.clone();
+        ui.on_apply_to_screensaver(move |wall_name| {
+            let mut cfg = config::Config::load();
+            let wall_info = {
+                let state = app_state_ss.read().unwrap();
+                state.wallpapers.iter().find(|w| wall_name == w.name).map(|w| (w.path.clone(), w.name.clone()))
+            };
+
+            if let Some((path, name)) = wall_info {
+                let path_str = path.to_string_lossy().to_string();
+                if cfg.screensaver_wallpaper_path == path_str {
+                    cfg.screensaver_wallpaper_path = String::new();
+                    cfg.screensaver_enabled = false;
+                } else {
+                    cfg.screensaver_wallpaper_path = path_str;
+                    cfg.screensaver_enabled = true;
+                }
+                cfg.save().ok();
+
+                #[cfg(target_os = "windows")]
+                platform::windows::sync_screensaver_registry(
+                    cfg.screensaver_enabled,
+                    cfg.screensaver_timeout_mins,
+                    cfg.screensaver_secure,
+                ).ok();
+
+                if let Some(ui) = ui_ss.upgrade() {
+                    ui.set_screensaver_enabled(cfg.screensaver_enabled);
+                    ui.set_screensaver_wallpaper_path(SharedString::from(&cfg.screensaver_wallpaper_path));
+                    let disp_name = if cfg.screensaver_enabled { name } else { "".to_string() };
+                    ui.set_screensaver_wallpaper_name(SharedString::from(&disp_name));
+
+                    if let Ok(state) = app_state_ss.read() {
+                        let items = build_library_items(&state.wallpapers, &state.monitors, &cfg.screensaver_wallpaper_path);
+                        wallpapers_model_ss.set_vec(items);
+                    }
+                }
+            }
+        });
+    }
+
+    ui.on_screensaver_toggled(move |enabled| {
+        let mut cfg = config::Config::load();
+        cfg.screensaver_enabled = enabled;
+        cfg.save().ok();
+        #[cfg(target_os = "windows")]
+        platform::windows::sync_screensaver_registry(cfg.screensaver_enabled, cfg.screensaver_timeout_mins, cfg.screensaver_secure).ok();
+    });
+
+    ui.on_screensaver_timeout_changed(move |timeout| {
+        let mut cfg = config::Config::load();
+        cfg.screensaver_timeout_mins = timeout as u32;
+        cfg.save().ok();
+        #[cfg(target_os = "windows")]
+        platform::windows::sync_screensaver_registry(cfg.screensaver_enabled, cfg.screensaver_timeout_mins, cfg.screensaver_secure).ok();
+    });
+
+    ui.on_screensaver_secure_toggled(move |secure| {
+        let mut cfg = config::Config::load();
+        cfg.screensaver_secure = secure;
+        cfg.save().ok();
+        #[cfg(target_os = "windows")]
+        platform::windows::sync_screensaver_registry(cfg.screensaver_enabled, cfg.screensaver_timeout_mins, cfg.screensaver_secure).ok();
+    });
+
+    ui.on_open_screensaver_settings(move || {
+        #[cfg(target_os = "windows")]
+        platform::windows::open_windows_screensaver_settings();
     });
 
     // Confirm a movie/shader exclusivity swap: re-run the stashed apply with the force

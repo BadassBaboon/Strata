@@ -341,3 +341,53 @@ pub fn monitor_covered(origin: (i32, i32), size: (u32, u32)) -> bool {
     unsafe { EnumWindows(Some(cb), &mut ctx as *mut _ as LPARAM); }
     ctx.covered
 }
+
+/// Synchronize screensaver settings directly with the Windows Registry.
+#[cfg(target_os = "windows")]
+pub fn sync_screensaver_registry(enabled: bool, timeout_mins: u32, secure: bool) -> Result<(), String> {
+    use windows_sys::Win32::System::Registry::{
+        RegOpenKeyExA, RegSetValueExA, RegCloseKey, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ
+    };
+
+    unsafe {
+        let mut key: windows_sys::Win32::System::Registry::HKEY = 0;
+        let res = RegOpenKeyExA(HKEY_CURRENT_USER, b"Control Panel\\Desktop\0".as_ptr(), 0, KEY_SET_VALUE, &mut key);
+        if res != 0 {
+            return Err(format!("Failed to open Windows Registry Desktop key: error {}", res));
+        }
+
+        if let Ok(exe_path) = std::env::current_exe() {
+            let scr_path = exe_path.with_file_name("strata.scr");
+            if !scr_path.exists() {
+                let _ = std::fs::copy(&exe_path, &scr_path);
+            }
+            if enabled {
+                let path_str = scr_path.to_string_lossy();
+                let path_bytes = format!("{}\0", path_str);
+                RegSetValueExA(key, b"SCRNSAVE.EXE\0".as_ptr(), 0, REG_SZ, path_bytes.as_ptr(), path_bytes.len() as u32);
+            }
+        }
+
+        let active_val = if enabled { b"1\0".as_ptr() } else { b"0\0".as_ptr() };
+        RegSetValueExA(key, b"ScreenSaveActive\0".as_ptr(), 0, REG_SZ, active_val, 2);
+
+        let timeout_sec = (timeout_mins.max(1) * 60).to_string();
+        let timeout_bytes = format!("{}\0", timeout_sec);
+        RegSetValueExA(key, b"ScreenSaveTimeOut\0".as_ptr(), 0, REG_SZ, timeout_bytes.as_ptr(), timeout_bytes.len() as u32);
+
+        let secure_val = if secure { b"1\0".as_ptr() } else { b"0\0".as_ptr() };
+        RegSetValueExA(key, b"ScreenSaverIsSecure\0".as_ptr(), 0, REG_SZ, secure_val, 2);
+
+        RegCloseKey(key);
+    }
+    Ok(())
+}
+
+/// Open the official Windows Screen Saver Settings dialog.
+#[cfg(target_os = "windows")]
+pub fn open_windows_screensaver_settings() {
+    let _ = std::process::Command::new("control")
+        .arg("desk.cpl,,@screensaver")
+        .spawn();
+}
+
