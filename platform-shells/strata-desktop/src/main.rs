@@ -263,6 +263,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+#[cfg(target_os = "windows")]
+static SCREENSAVER_EXIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(target_os = "windows")]
+static INITIAL_MOUSE_POS: std::sync::Mutex<Option<(i32, i32)>> = std::sync::Mutex::new(None);
+#[cfg(target_os = "windows")]
+static SCREENSAVER_START_TIME: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn low_level_mouse_proc(code: i32, wparam: usize, lparam: isize) -> isize {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MSLLHOOKSTRUCT, WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_RBUTTONDOWN, WM_MBUTTONDOWN, CallNextHookEx};
+    if code >= 0 {
+        let ms = *(lparam as *const MSLLHOOKSTRUCT);
+        let now = std::time::Instant::now();
+        let start = SCREENSAVER_START_TIME.lock().unwrap().unwrap_or(now);
+        if now.duration_since(start).as_millis() > 400 {
+            if wparam == WM_MOUSEMOVE as usize {
+                let mut guard = INITIAL_MOUSE_POS.lock().unwrap();
+                if let Some((init_x, init_y)) = *guard {
+                    let dx = (ms.pt.x - init_x).abs();
+                    let dy = (ms.pt.y - init_y).abs();
+                    if dx > 10 || dy > 10 {
+                        SCREENSAVER_EXIT.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                } else {
+                    *guard = Some((ms.pt.x, ms.pt.y));
+                }
+            } else if wparam == WM_LBUTTONDOWN as usize || wparam == WM_RBUTTONDOWN as usize || wparam == WM_MBUTTONDOWN as usize {
+                SCREENSAVER_EXIT.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+    }
+    CallNextHookEx(0, code, wparam, lparam)
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lparam: isize) -> isize {
+    use windows_sys::Win32::UI::WindowsAndMessaging::CallNextHookEx;
+    if code >= 0 {
+        let now = std::time::Instant::now();
+        let start = SCREENSAVER_START_TIME.lock().unwrap().unwrap_or(now);
+        if now.duration_since(start).as_millis() > 200 {
+            SCREENSAVER_EXIT.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    CallNextHookEx(0, code, wparam, lparam)
+}
+
 fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
     use winit::application::ApplicationHandler;
     use winit::event::WindowEvent;
@@ -308,6 +355,7 @@ fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
         wallpaper_dir: std::path::PathBuf,
         windows: Vec<Arc<Window>>,
         renderers: Vec<core_engine::Renderer>,
+        webviews: Vec<wry::WebView>,
         context: Option<Arc<core_engine::GraphicsContext>>,
         rt: tokio::runtime::Runtime,
         initial_cursor: Option<(f64, f64)>,
@@ -319,28 +367,44 @@ fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
             if !self.windows.is_empty() {
                 return;
             }
-            let context = Arc::new(self.rt.block_on(core_engine::GraphicsContext::new()).unwrap());
-            self.context = Some(context.clone());
-
             let monitors = controller::discover_monitors();
             log::info!("Screensaver discovered {} monitor(s).", monitors.len());
+            let is_vid = controller::video_wallpaper_path(&self.wallpaper_dir);
+
             for mon in &monitors {
                 let attributes = Window::default_attributes()
-                    .with_title("Strata Screensaver")
+                    .with_title("Strata Screen Saver")
                     .with_inner_size(winit::dpi::PhysicalSize::new(mon.resolution.0, mon.resolution.1))
                     .with_position(winit::dpi::PhysicalPosition::new(mon.position.0, mon.position.1))
                     .with_decorations(false)
+                    .with_visible(false)
                     .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
                     .with_active(true);
                 if let Ok(window) = event_loop.create_window(attributes) {
                     let win_arc = Arc::new(window);
-                    if let Ok(surface) = context.instance.create_surface(win_arc.clone()) {
-                        if let Ok(mut renderer) = core_engine::Renderer::new(context.clone(), win_arc.clone(), surface, win_arc.inner_size()) {
-                            renderer.set_mouse_mode(0);
-                            let _ = renderer.add_layer(&self.wallpaper_dir, 1.0, 1.0, "Fill".to_string(), [0.0, 0.0, 1.0, 1.0], "normal".to_string());
+                    if let Some(ref vid_path) = is_vid {
+                        log::info!("Screensaver initializing video wallpaper: {:?}", vid_path);
+                        if let Ok(wv) = attach_video_webview(&win_arc, vid_path, &mon.id, "cover") {
+                            win_arc.set_visible(true);
                             self.windows.push(win_arc);
-                            self.renderers.push(renderer);
-                            log::info!("Screensaver window initialized for monitor at {:?}", mon.position);
+                            self.webviews.push(wv);
+                            log::info!("Screensaver video webview attached for monitor at {:?}", mon.position);
+                        } else {
+                            log::error!("Failed to attach screensaver video webview for monitor at {:?}", mon.position);
+                        }
+                    } else {
+                        let context = self.context.get_or_insert_with(|| {
+                            Arc::new(self.rt.block_on(core_engine::GraphicsContext::new()).unwrap())
+                        }).clone();
+                        if let Ok(surface) = context.instance.create_surface(win_arc.clone()) {
+                            if let Ok(mut renderer) = core_engine::Renderer::new(context, win_arc.clone(), surface, win_arc.inner_size()) {
+                                renderer.set_mouse_mode(0);
+                                let _ = renderer.add_layer(&self.wallpaper_dir, 1.0, 1.0, "Fill".to_string(), [0.0, 0.0, 1.0, 1.0], "normal".to_string());
+                                win_arc.set_visible(true);
+                                self.windows.push(win_arc);
+                                self.renderers.push(renderer);
+                                log::info!("Screensaver shader window initialized for monitor at {:?}", mon.position);
+                            }
                         }
                     }
                 }
@@ -390,17 +454,39 @@ fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+            #[cfg(target_os = "windows")]
+            if SCREENSAVER_EXIT.load(std::sync::atomic::Ordering::SeqCst) {
+                log::info!("Screensaver exiting via low-level input hook.");
+                _event_loop.exit();
+                return;
+            }
             for win in &self.windows {
                 win.request_redraw();
             }
         }
     }
 
+    #[cfg(target_os = "windows")]
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowsHookExW, UnhookWindowsHookEx, WH_MOUSE_LL, WH_KEYBOARD_LL};
+
+    #[cfg(target_os = "windows")]
+    {
+        *SCREENSAVER_START_TIME.lock().unwrap() = Some(std::time::Instant::now());
+        *INITIAL_MOUSE_POS.lock().unwrap() = None;
+        SCREENSAVER_EXIT.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[cfg(target_os = "windows")]
+    let mouse_hook = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(low_level_mouse_proc), 0, 0) };
+    #[cfg(target_os = "windows")]
+    let kbd_hook = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), 0, 0) };
+
     let event_loop = EventLoop::new()?;
     let mut app = ScreensaverApp {
         wallpaper_dir: ss_path,
         windows: Vec::new(),
         renderers: Vec::new(),
+        webviews: Vec::new(),
         context: None,
         rt: tokio::runtime::Runtime::new()?,
         initial_cursor: None,
@@ -408,7 +494,15 @@ fn run_screensaver_mode() -> Result<(), Box<dyn std::error::Error>> {
     };
     let _res = event_loop.run_app(&mut app);
     app.renderers.clear();
+    app.webviews.clear();
     app.windows.clear();
+
+    #[cfg(target_os = "windows")]
+    unsafe {
+        if mouse_hook != 0 { UnhookWindowsHookEx(mouse_hook); }
+        if kbd_hook != 0 { UnhookWindowsHookEx(kbd_hook); }
+    }
+
     log::info!("Screensaver closed cleanly.");
     std::process::exit(0);
 }
@@ -891,6 +985,7 @@ fn attach_video_webview(window: &winit::window::Window, video_path: &std::path::
 
         let mut builder = wry::WebViewBuilder::new(window)
             .with_url(&page_url)
+            .with_background_color((0, 0, 0, 255))
             .with_transparent(false) // opaque: skip per-frame alpha compositing
             .with_web_context(ctx);
         // WebView2 (Windows): trim features we never use and guarantee autoplay.
@@ -924,6 +1019,8 @@ fn create_daemon_video_window(
             .with_position(winit::dpi::PhysicalPosition::new(x, y)),
     ).map_err(|e| e.to_string())?);
 
+    let webview = attach_video_webview(window.as_ref(), std::path::Path::new(path), monitor_id, fit)?;
+
     if let Ok(handle) = window.window_handle() {
         if let RawWindowHandle::Win32(hh) = handle.as_raw() {
             let hwnd = hh.hwnd.get();
@@ -936,7 +1033,6 @@ fn create_daemon_video_window(
             }
         }
     }
-    let webview = attach_video_webview(window.as_ref(), std::path::Path::new(path), monitor_id, fit)?;
     Ok((window, webview))
 }
 
@@ -1867,14 +1963,16 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
     update_library_group_counts(&ui, &initial_items);
     let wallpapers_model = Rc::new(VecModel::<WallpaperItem>::from(initial_items));
     ui.set_wallpapers(ModelRc::from(wallpapers_model.clone()));
-    // Safety check: ensure strata-screensaver.scr exists in AppData if screensaver is enabled
+    // Safety check: ensure Strata.scr exists in AppData if screensaver is enabled
     if config.screensaver_enabled {
         if let Some(user_data) = controller::user_data_dir() {
             let _ = std::fs::create_dir_all(&user_data);
-            let scr_path = user_data.join("strata-screensaver.scr");
-            // Remove legacy Strata.scr if present
-            let old_scr = user_data.join("Strata.scr");
-            if old_scr.exists() { let _ = std::fs::remove_file(&old_scr); }
+            let scr_path = user_data.join("Strata.scr");
+            // Remove legacy strata-screensaver.scr and "Strata Screen Saver.scr" if present
+            let old_scr1 = user_data.join("strata-screensaver.scr");
+            if old_scr1.exists() { let _ = std::fs::remove_file(&old_scr1); }
+            let old_scr2 = user_data.join("Strata Screen Saver.scr");
+            if old_scr2.exists() { let _ = std::fs::remove_file(&old_scr2); }
             if let Ok(exe_path) = std::env::current_exe() {
                 let should_copy = !scr_path.exists() || {
                     let m_exe = std::fs::metadata(&exe_path).ok();
@@ -1886,7 +1984,7 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
                 };
                 if should_copy {
                     if std::fs::copy(&exe_path, &scr_path).is_err() && !scr_path.exists() {
-                        log::warn!("strata-screensaver.scr missing and could not be created; disabling screensaver.");
+                        log::warn!("Strata.scr missing and could not be created; disabling screensaver.");
                         config.screensaver_enabled = false;
                         config.screensaver_wallpaper_path = String::new();
                         config.save().ok();
@@ -2106,10 +2204,10 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
     let sort_mode_import = sort_mode.clone();
     ui.on_import_requested(move || {
         if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Wallpaper (.mp4, .webm, .zip, .json)", &["mp4", "webm", "zip", "json"])
-            .add_filter("Video (.mp4, .webm)", &["mp4", "webm"])
-            .add_filter("Shadertoy export (.json)", &["json"])
-            .add_filter("Wallpaper / Shadertoy ZIP (.zip)", &["zip"])
+            .add_filter("Wallpaper Package", &["mp4", "webm", "zip", "json"])
+            .add_filter("Video Wallpaper", &["mp4", "webm"])
+            .add_filter("Shadertoy JSON", &["json"])
+            .add_filter("Wallpaper ZIP", &["zip"])
             .pick_file()
         {
             let is_video = path.extension().and_then(|e| e.to_str())
