@@ -1699,6 +1699,7 @@ component WallpaperCard inherits Rectangle {
                 // Avatars of monitors this wallpaper is applied to
                 HorizontalLayout {
                     spacing: -6px; alignment: start; y: (parent.height - self.height)/2;
+                    padding-left: (root.usage-counts[0] == 0 ? 6px : 0px) + (root.usage-counts[1] == 0 ? 6px : 0px);
                     for count[i] in root.usage-counts : Rectangle {
                         visible: count > 0;
                         width: count > 0 ? 28px : 0px; height: 28px; border-radius: 14px;
@@ -1713,12 +1714,12 @@ component WallpaperCard inherits Rectangle {
                     }
                     if root.is-screensaver : Rectangle {
                         width: 28px; height: 28px; border-radius: 14px;
-                        background: Theme.palette.accent;
+                        background: Theme.is-dark ? #ffffff : #000000;
                         border-width: 2px; border-color: Theme.palette.card;
                         y: (parent.height - self.height)/2;
                         Text {
                             text: "zzz";
-                            color: #ffffff;
+                            color: Theme.is-dark ? #000000 : #ffffff;
                             font-size: 10px; font-weight: 900;
                             horizontal-alignment: center; vertical-alignment: center;
                         }
@@ -1727,7 +1728,7 @@ component WallpaperCard inherits Rectangle {
 
                 // Apply / Manage button → popup
                 apply-btn := Rectangle {
-                    height: 34px; width: btn-row.preferred-width + 24px;
+                    height: 34px; width: btn-row.preferred-width;
                     border-radius: 9px;
                     background: btn-ta.has-hover ? Theme.palette.accent.with-alpha(0.12) : transparent;
                     animate background { duration: 150ms; }
@@ -1852,6 +1853,8 @@ component GroupSection inherits VerticalLayout {
     callback delete-requested(int);
     callback toggled(bool); // fired on header click so the host can persist collapse state
     spacing: 0;
+    vertical-stretch: 0;
+    height: self.preferred-height;
 
     // Header
     Rectangle {
@@ -1876,16 +1879,20 @@ component GroupSection inherits VerticalLayout {
         }
         hdr-ta := TouchArea { clicked => { root.collapsed = !root.collapsed; root.toggled(root.collapsed); } mouse-cursor: pointer; }
     }
-    Rectangle { height: 12px; } // gap under the header
+    Rectangle { visible: !root.collapsed; height: self.visible ? 12px : 0px; } // gap under the header
 
     if !root.collapsed : HorizontalLayout {
         spacing: 32px; alignment: start;
+        height: self.preferred-height;
         for lane in root.lanes : VerticalLayout {
             width: root.col-width;
+            height: self.preferred-height;
             spacing: 0; alignment: start;
             for wallpaper[i] in root.wallpapers : VerticalLayout {
-                padding-bottom: (wallpaper.group == root.group && wallpaper.visible && Math.mod(wallpaper.group-index, root.cols) == lane) ? 32px : 0px;
-                if wallpaper.group == root.group && wallpaper.visible && (Math.mod(wallpaper.group-index, root.cols) == lane) : WallpaperCard {
+                visible: wallpaper.group == root.group && wallpaper.visible && Math.mod(wallpaper.group-index, root.cols) == lane;
+                height: self.visible ? self.preferred-height : 0px;
+                padding-bottom: self.visible ? 32px : 0px;
+                if self.visible : WallpaperCard {
                     name:          wallpaper.name;
                     author:        wallpaper.author;
                     tags:          wallpaper.tags;
@@ -1907,7 +1914,7 @@ component GroupSection inherits VerticalLayout {
             }
         }
     }
-    Rectangle { height: 20px; } // gap below the section
+    Rectangle { visible: !root.collapsed; height: self.visible ? 20px : 0px; } // gap below the section
 }
 
 // ── Parallax Studio ─────────────────────────────────────────────────────────
@@ -2978,7 +2985,7 @@ export component AppWindow inherits Window {
 
                     // Import (primary CTA)
                     Rectangle {
-                        height: 48px; width: imp-row.preferred-width + 40px; border-radius: 12px;
+                        height: 48px; width: imp-row.preferred-width; border-radius: 12px;
                         background: imp-ta.has-hover ? Theme.palette.accent.brighter(0.12) : Theme.palette.accent;
                         drop-shadow-blur: 16px; drop-shadow-color: Theme.palette.accent.with-alpha(0.3); drop-shadow-offset-y: 4px;
                         animate background { duration: 150ms; }

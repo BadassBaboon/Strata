@@ -39,6 +39,13 @@ pub fn save_window_placement(hwnd: isize) {
     }
 }
 
+#[cfg(target_os = "windows")]
+pub fn is_window_maximized(hwnd: isize) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::IsZoomed;
+    if hwnd == 0 { return false; }
+    unsafe { IsZoomed(hwnd as HWND) != 0 }
+}
+
 /// Re-apply the placement saved by `save_window_placement`. Returns true if the window
 /// was restored to a MAXIMIZED state - in that case the maximize already resizes the
 /// window (so it repaints itself) and the caller must NOT add a size nudge (that would

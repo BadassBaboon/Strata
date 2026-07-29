@@ -3855,7 +3855,8 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
     // `needs_repaint` (set on those events) makes the timer nudge the size +2px and
     // restore it next tick (two resize events → full repaint). `restore_size` carries
     // the pending revert.
-    let restore_size = std::cell::Cell::new(None::<slint::PhysicalSize>);
+    let restore_size = std::rc::Rc::new(std::cell::Cell::new(None::<slint::PhysicalSize>));
+    let restore_size_timer = restore_size.clone();
     let needs_repaint_timer = needs_repaint.clone();
     // Last observed "window hidden" state (minimized OR DWM-cloaked). Polled each tick so a
     // restore ALWAYS triggers a full repaint, regardless of whether winit emitted an
@@ -4208,17 +4209,24 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
         }
 
         if let Some(ui) = ui_handle_timer.upgrade() {
-            // Force a full repaint after a restore/un-occlude (software renderer leaves
-            // stale regions otherwise): revert the previous tick's size nudge, or apply
-            // a fresh one if requested. `else if` keeps the two on separate ticks so each
-            // is a real resize event.
-            if let Some(sz) = restore_size.take() {
-                ui.window().set_size(sz);
-            } else if needs_repaint_timer.replace(false) && !ui_maximized_timer.get() {
-                // Skip while maximized - resizing a maximized window would shift it.
-                let sz = ui.window().size();
-                ui.window().set_size(slint::PhysicalSize::new(sz.width, sz.height + 2));
-                restore_size.set(Some(sz));
+            #[cfg(target_os = "windows")]
+            let is_max = platform::windows::is_window_maximized(ui_hwnd_timer.get());
+            #[cfg(not(target_os = "windows"))]
+            let is_max = ui_maximized_timer.get();
+            ui_maximized_timer.set(is_max);
+
+            if let Some(sz) = restore_size_timer.take() {
+                if !is_max {
+                    ui.window().set_size(sz);
+                }
+            } else if needs_repaint_timer.replace(false) {
+                if !is_max {
+                    let sz = ui.window().size();
+                    ui.window().set_size(slint::PhysicalSize::new(sz.width, sz.height + 2));
+                    restore_size_timer.set(Some(sz));
+                } else {
+                    ui.window().request_redraw();
+                }
             }
 
             // Accent the library refresh icon while the thumbnail thread runs.
@@ -4318,10 +4326,10 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
                             // resize to force the full repaint - without it the small window
                             // comes back as white blocks until a mouse-move / resize.
                             let maximized = platform::windows::restore_window_placement(ui_hwnd_timer.get());
-                            if !maximized && restore_size.get().is_none() {
+                            if !maximized && restore_size_timer.get().is_none() {
                                 let sz = ui.window().size();
                                 ui.window().set_size(slint::PhysicalSize::new(sz.width, sz.height + 2));
-                                restore_size.set(Some(sz));
+                                restore_size_timer.set(Some(sz));
                             }
                         } else {
                             // Currently shown → hide to tray (mirror the X button).
@@ -4429,6 +4437,7 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
     });
 
     // When the window becomes visible again after being hidden/minimized/occluded
+    // When the window becomes visible again after being hidden/minimized/occluded
     // (taskbar restore, waking a dormant window), Windows may have discarded the
     // software framebuffer, leaving stale/transparent regions. Flag a full repaint so
     // the timer nudges a resize. `Occluded(false)` is the un-hide/un-minimize signal.
@@ -4440,14 +4449,18 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
         let move_settle_evt = move_settle.clone();
         let ui_maximized_evt = ui_maximized.clone();
         let needs_repaint_evt = needs_repaint.clone();
-        ui.window().on_winit_window_event(move |win, event| {
-            // NOTE: this fires for EVERY event (incl. high-frequency CursorMoved), so do
-            // only cheap flag-setting here - never per-event syscalls.
+        let restore_size_evt = restore_size.clone();
+        let ui_hwnd_evt = ui_hwnd.clone();
+        ui.window().on_winit_window_event(move |_win, event| {
+            let is_max = platform::windows::is_window_maximized(ui_hwnd_evt.get());
             match event {
                 WindowEvent::Resized(_) => {
                     // Maximized state only changes via a resize; query the syscall here,
                     // not on every event.
-                    ui_maximized_evt.set(win.is_maximized());
+                    ui_maximized_evt.set(is_max);
+                    if is_max {
+                        restore_size_evt.take();
+                    }
                     // A maximize/restore fires Moved (which arms the move-debounce) AND a
                     // Resized. The resize already self-heals the buffer, so cancel any
                     // pending move-nudge - otherwise the nudge would resize (and shift) the
@@ -4464,7 +4477,7 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
                         // only repaints dirty regions, and a click/hover then paints
                         // piecemeal). Flag a full-repaint nudge (timer resizes ±2px →
                         // softbuffer reallocates → guaranteed full repaint).
-                        win.request_redraw();
+                        _win.request_redraw();
                         needs_repaint_evt.set(true);
                     }
                 }
@@ -4473,7 +4486,7 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
                     // Occluded). Only force the full-repaint nudge if we believed the
                     // window was hidden (a genuine restore) - NOT on every focus gain,
                     // which would cause a 2px resize flicker on normal alt-tab/click.
-                    win.request_redraw();
+                    _win.request_redraw();
                     if !ui_visible_evt.get() {
                         needs_repaint_evt.set(true);
                     }
@@ -4481,7 +4494,10 @@ fn run_ui_mode(start_minimized: bool, open_screensaver_tab: bool) -> Result<(), 
                 }
                 WindowEvent::Moved(_) => {
                     // Debounced in the timer - a move can reveal stale (unpainted) regions.
-                    move_settle_evt.set(Some(std::time::Instant::now()));
+                    // Ignore while maximized so child window creation/reparenting doesn't trigger move-nudges.
+                    if !is_max {
+                        move_settle_evt.set(Some(std::time::Instant::now()));
+                    }
                 }
                 _ => {}
             }
